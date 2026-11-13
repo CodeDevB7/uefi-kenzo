@@ -1,0 +1,8 @@
+[Defines]
+  DEC_SPECIFICATION              = 0x00010005
+  PACKAGE_NAME                   = kenzoPkg
+  PACKAGE_GUID                   = 3C9E62DF-E8A7-44E8-89EA-897534D7A412
+  PACKAGE_VERSION                = 0.1
+
+[Includes]
+  Include
