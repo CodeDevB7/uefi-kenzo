@@ -1,0 +1,39 @@
+## @file
+#  Simple Framebuffer GOP driver for Xiaomi Redmi Note 3 (Kenzo) MSM8956.
+#  Reuses LittleKernel continuous splash and reconfigures MDP5 SSPP to 32-bit BGRX8888.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010019
+  BASE_NAME                      = KenzoSimpleFbDxe
+  FILE_GUID                      = 4D9C1B30-A1E4-4F7C-9A2B-7E3B2E1F04A1
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = KenzoSimpleFbDxeInitialize
+
+[Sources]
+  KenzoSimpleFbDxe.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  DevicePathLib
+  FrameBufferBltLib
+  IoLib
+  MemoryAllocationLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+
+[Protocols]
+  gEfiGraphicsOutputProtocolGuid                ## PRODUCES
+  gEfiDevicePathProtocolGuid                    ## PRODUCES
+
+[Depex]
+  TRUE

@@ -1,0 +1,30 @@
+## @file
+#  PlatformBootManagerLib implementation for Xiaomi Redmi Note 3 (Kenzo).
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = KenzoPlatformBootManagerLib
+  FILE_GUID                      = 7C9B4B6E-8F10-4D3A-A392-5F0D2D2B4C18
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  LIBRARY_CLASS                  = PlatformBootManagerLib|DXE_DRIVER
+
+[Sources]
+  KenzoPlatformBootManagerLib.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+
+[LibraryClasses]
+  BaseLib
+  DebugLib
+  UefiBootManagerLib
+  UefiBootServicesTableLib
+  UefiLib
+
+[Guids]
+  gEfiEndOfDxeEventGroupGuid

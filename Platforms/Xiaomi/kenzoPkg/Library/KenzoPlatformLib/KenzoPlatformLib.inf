@@ -1,0 +1,44 @@
+## @file
+#  ArmPlatformLib implementation for Xiaomi Redmi Note 3 (Kenzo) MSM8956.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = KenzoPlatformLib
+  FILE_GUID                      = 61F4DB72-CEF2-4318-B54C-063AEB15A7F8
+  MODULE_TYPE                    = BASE
+  VERSION_STRING                 = 1.0
+  LIBRARY_CLASS                  = ArmPlatformLib
+
+[Sources]
+  KenzoPlatformLib.c
+  KenzoPlatformMem.c
+
+[Sources.AArch64]
+  AArch64/KenzoPlatformHelper.S
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  ArmPkg/ArmPkg.dec
+  ArmPlatformPkg/ArmPlatformPkg.dec
+
+[LibraryClasses]
+  ArmLib
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  HobLib
+  MemoryAllocationLib
+  PcdLib
+
+[FixedPcd]
+  gArmTokenSpaceGuid.PcdSystemMemoryBase
+  gArmTokenSpaceGuid.PcdSystemMemorySize
+  gArmTokenSpaceGuid.PcdFdBaseAddress
+  gArmTokenSpaceGuid.PcdFdSize
+
+[Ppis]
+  gArmMpCoreInfoPpiGuid

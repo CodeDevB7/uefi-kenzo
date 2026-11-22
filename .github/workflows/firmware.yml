@@ -1,0 +1,95 @@
+name: Build Kenzo UEFI Firmware
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: uefi-kenzo-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  firmware:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Install EDK II and Boot Image tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential uuid-dev clang lld llvm python3 nasm \
+            acpica-tools device-tree-compiler git ca-certificates
+
+      - name: Check out uefi-kenzo
+        uses: actions/checkout@v4
+        with:
+          path: uefi-kenzo
+
+      - name: Check out UniXNU
+        uses: actions/checkout@v4
+        with:
+          repository: UniXNU/UniXNU
+          ref: c34f018aafd6befd5dc93c05a8dccd5bdce6724b
+          path: UniXNU
+
+      - name: Initialize DarwinBoot submodule in UniXNU
+        working-directory: UniXNU
+        run: git submodule update --init --depth 1 drivers/DarwinBoot
+
+      - name: Check out UniXNU-kenzo
+        uses: actions/checkout@v4
+        with:
+          repository: CodeDevB7/UniXNU-kenzo
+          ref: main
+          path: device
+
+      - name: Check out mu_basecore
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/mu_basecore
+          ref: cfb93724a06ff86ff5ba971413368a7809ee42a5
+          path: mu_basecore
+
+      - name: Initialize required mu_basecore submodules
+        working-directory: mu_basecore
+        run: |
+          git submodule update --init --depth 1 \
+            MdePkg/Library/BaseFdtLib/libfdt \
+            BaseTools/Source/C/BrotliCompress/brotli \
+            MdeModulePkg/Library/BrotliCustomDecompressLib/brotli
+
+      - name: Build SILICIUM_UEFI.fd and kenzo-uefi-only-boot.img
+        working-directory: UniXNU
+        run: |
+          set -euo pipefail
+          ./unixnu defconfig kenzo_defconfig -D ../device
+          ./unixnu build firmware -D ../device --uefi ../uefi-kenzo --edk2 ../mu_basecore --target DEBUG -j "$(nproc)"
+          ./unixnu bootimg -D ../device --uefi ../uefi-kenzo --dtb ../uefi-kenzo/Resources/DTBs/kenzo.dtb --ramdisk none --target DEBUG -o ../kenzo-uefi-only-boot.img
+          echo "=== Output Checksums ==="
+          ls -lh ../uefi-kenzo/Build/kenzoPkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd ../kenzo-uefi-only-boot.img
+          sha256sum ../uefi-kenzo/Build/kenzoPkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd ../kenzo-uefi-only-boot.img
+
+      - name: Upload firmware build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kenzo-uefi-build-logs
+          path: |
+            UniXNU/out/kenzo/ipados-17.7.11-21H461/kenzo/logs/*.log
+          if-no-files-found: ignore
+
+      - name: Upload SILICIUM_UEFI.fd and boot image
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kenzo-uefi-firmware-debug
+          path: |
+            uefi-kenzo/Build/kenzoPkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd
+            kenzo-uefi-only-boot.img
+          if-no-files-found: error
