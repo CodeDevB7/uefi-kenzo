@@ -49,27 +49,12 @@ jobs:
           ref: main
           path: device
 
-      - name: Check out mu_basecore
-        uses: actions/checkout@v4
-        with:
-          repository: microsoft/mu_basecore
-          ref: cfb93724a06ff86ff5ba971413368a7809ee42a5
-          path: mu_basecore
-
-      - name: Initialize required mu_basecore submodules
-        working-directory: mu_basecore
-        run: |
-          git submodule update --init --depth 1 \
-            MdePkg/Library/BaseFdtLib/libfdt \
-            BaseTools/Source/C/BrotliCompress/brotli \
-            MdeModulePkg/Library/BrotliCustomDecompressLib/brotli
-
       - name: Build SILICIUM_UEFI.fd and kenzo-uefi-only-boot.img
         working-directory: UniXNU
         run: |
           set -euo pipefail
           ./unixnu defconfig kenzo_defconfig -D ../device
-          ./unixnu build firmware -D ../device --uefi ../uefi-kenzo --edk2 ../mu_basecore --target DEBUG -j "$(nproc)"
+          ./unixnu build firmware -D ../device --uefi ../uefi-kenzo --target DEBUG -j "$(nproc)"
           ./unixnu bootimg -D ../device --uefi ../uefi-kenzo --dtb ../uefi-kenzo/Resources/DTBs/kenzo.dtb --ramdisk none --target DEBUG -o ../kenzo-uefi-only-boot.img
           echo "=== Output Checksums ==="
           ls -lh ../uefi-kenzo/Build/kenzoPkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd ../kenzo-uefi-only-boot.img
