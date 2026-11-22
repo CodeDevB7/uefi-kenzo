@@ -53,7 +53,7 @@
   GptLib|MdeModulePkg/Library/GptLib/GptLib.inf
   HiiLib|MdeModulePkg/Library/UefiHiiLib/UefiHiiLib.inf
   HobLib|MdePkg/Library/DxeHobLib/DxeHobLib.inf
-  HwResetSystemLib|MdeModulePkg/Library/BaseResetSystemLibNull/BaseResetSystemLibNull.inf
+  HwResetSystemLib|ArmPkg/Library/ArmPsciResetSystemLib/ArmPsciResetSystemLib.inf
   ImagePropertiesRecordLib|MdeModulePkg/Library/ImagePropertiesRecordLib/ImagePropertiesRecordLib.inf
   IoLib|MdePkg/Library/BaseIoLibIntrinsic/BaseIoLibIntrinsic.inf
   MemoryAllocationLib|MdePkg/Library/UefiMemoryAllocationLib/UefiMemoryAllocationLib.inf
@@ -132,8 +132,7 @@
   gArmTokenSpaceGuid.PcdGicDistributorBase|0x0B000000
   gArmTokenSpaceGuid.PcdGicInterruptInterfaceBase|0x0B002000
 
-  # Arch Timer (19.2 MHz; verified Kenzo GICv2 PPI INTIDs: 17, 18, 19, 20)
-  gArmTokenSpaceGuid.PcdArmArchTimerFreqInHz|19200000
+  # Arch Timer (19.2 MHz read from CNTFRQ_EL0; verified Kenzo GICv2 PPI INTIDs: 17, 18, 19, 20)
   gArmTokenSpaceGuid.PcdArmArchTimerHypIntrNum|17
   gArmTokenSpaceGuid.PcdArmArchTimerSecIntrNum|18
   gArmTokenSpaceGuid.PcdArmArchTimerIntrNum|19
