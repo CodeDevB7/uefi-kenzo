@@ -143,11 +143,13 @@
 
   # BDS / Console
   gEfiMdePkgTokenSpaceGuid.PcdPlatformBootTimeOut|3
-  gArmTokenSpaceGuid.PcdRemapUnusedMemoryNx|FALSE
 
   # Firmware identity
   gEfiMdeModulePkgTokenSpaceGuid.PcdFirmwareVendor|L"CodeDevB7"
   gEfiMdeModulePkgTokenSpaceGuid.PcdFirmwareVersionString|L"kenzo-uefi-0.1"
+
+[PcdsFeatureFlag]
+  gArmTokenSpaceGuid.PcdRemapUnusedMemoryNx|FALSE
 
 [PcdsDynamicDefault]
   gEfiMdeModulePkgTokenSpaceGuid.PcdConOutRow|50
