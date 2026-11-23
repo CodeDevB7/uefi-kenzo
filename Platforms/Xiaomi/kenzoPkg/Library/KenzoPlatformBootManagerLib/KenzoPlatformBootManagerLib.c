@@ -6,6 +6,8 @@
 
 #include <Uefi.h>
 #include <Guid/EventGroup.h>
+#include <Library/BaseLib.h>
+#include <Library/CpuLib.h>
 #include <Library/DebugLib.h>
 #include <Library/PlatformBootManagerLib.h>
 #include <Library/UefiBootManagerLib.h>
@@ -83,7 +85,9 @@ PlatformBootManagerDeadloop (
   VOID
   )
 {
-  EFI_DEADLOOP ();
+  while (TRUE) {
+    CpuPause ();
+  }
 }
 
 VOID
