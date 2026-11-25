@@ -38,6 +38,251 @@
 #define SDCC2_CORE_BASE           0x07864000ULL
 #define SDCC2_HC_BASE             0x07864900ULL
 
+#define SMEM_BASE_ADDR            0x86300000ULL
+#define SMEM_HEAP_TOC_OFFSET      0x000000D0ULL
+#define APCS_IPC_REG              0x0B011008ULL
+#define TLMM_SDC2_HDRV_PULL_CTL   0x0110A000ULL
+
+typedef struct {
+  UINT32  Allocated;
+  UINT32  Offset;
+  UINT32  Size;
+  UINT32  AuxBase;
+} SMEM_HEAP_ENTRY;
+
+typedef struct {
+  CHAR8   Name[20];
+  UINT32  Cid;
+  UINT32  Ctype;
+  UINT32  RefCount;
+} SMD_ALLOC_ELM;
+
+typedef struct {
+  volatile UINT32  State;
+  volatile UINT32  FDsr;
+  volatile UINT32  FCts;
+  volatile UINT32  FCd;
+  volatile UINT32  FRi;
+  volatile UINT32  FHead;
+  volatile UINT32  FTail;
+  volatile UINT32  FState;
+  volatile UINT32  FBlockReadIntr;
+  volatile UINT32  Tail;
+  volatile UINT32  Head;
+} SMD_HALF_CH_WORD;
+
+STATIC
+UINT64
+SmemGetItem (
+  IN  UINT32  ItemId,
+  OUT UINT32  *SizeOut
+  )
+{
+  CONST SMEM_HEAP_ENTRY  *Toc;
+  UINT32                 Base;
+
+  if (ItemId >= 512) {
+    return 0;
+  }
+  Toc = (CONST SMEM_HEAP_ENTRY *)(UINTN)(SMEM_BASE_ADDR + SMEM_HEAP_TOC_OFFSET);
+  if (Toc[ItemId].Allocated == 0) {
+    return 0;
+  }
+  if (SizeOut != NULL) {
+    *SizeOut = Toc[ItemId].Size;
+  }
+  Base = Toc[ItemId].AuxBase & 0xFFFFFFFCU;
+  return (UINT64)(Base ? Base : (UINT32)SMEM_BASE_ADDR) + Toc[ItemId].Offset;
+}
+
+STATIC
+VOID
+SmdRingRpm (
+  VOID
+  )
+{
+  MemoryFence ();
+  MmioWrite32 (APCS_IPC_REG, BIT0);
+  MemoryFence ();
+}
+
+STATIC
+VOID
+SmdWriteRing (
+  IN UINT64      FifoBase,
+  IN UINT32      FifoSize,
+  IN OUT UINT32  *Head,
+  IN CONST VOID  *Src,
+  IN UINT32      Len
+  )
+{
+  CONST UINT32  *W = (CONST UINT32 *)Src;
+  UINT32        Words = Len / 4;
+  UINT32        Idx = *Head;
+  UINT32        I;
+
+  for (I = 0; I < Words; I++) {
+    MmioWrite32 (FifoBase + Idx, W[I]);
+    Idx += 4;
+    if (Idx >= FifoSize) {
+      Idx = 0;
+    }
+  }
+  *Head = Idx;
+}
+
+STATIC
+VOID
+RpmSendLdoVote (
+  IN SMD_HALF_CH_WORD  *Tx,
+  IN SMD_HALF_CH_WORD  *Rx,
+  IN UINT64            TxFifo,
+  IN UINT32            FifoSize,
+  IN UINT32            MsgId,
+  IN UINT32            LdoId,
+  IN UINT32            MicroVolts
+  )
+{
+  UINT32  Pkt[18];
+  UINT32  Head;
+  UINTN   Spin;
+
+  ZeroMem (Pkt, sizeof (Pkt));
+  // 20-byte SMD packet header (5 words)
+  Pkt[0] = 52U;           // Payload bytes (8 + 20 + 24)
+  // 8-byte qcom_rpm_header
+  Pkt[5] = 0x00716572U;   // "req\0"
+  Pkt[6] = 44U;           // Request body bytes (20 + 24)
+  // 20-byte qcom_rpm_request
+  Pkt[7]  = MsgId;
+  Pkt[8]  = 0U;           // ACTIVE_SET
+  Pkt[9]  = 0x616F646CU;  // "ldoa"
+  Pkt[10] = LdoId;
+  Pkt[11] = 24U;          // 2 KVPs (12 bytes each)
+  // KVP 1: swen = 1
+  Pkt[12] = 0x6E657773U;  // "swen"
+  Pkt[13] = 4U;
+  Pkt[14] = 1U;
+  // KVP 2: uv = MicroVolts
+  Pkt[15] = 0x00007675U;  // "uv\0\0"
+  Pkt[16] = 4U;
+  Pkt[17] = MicroVolts;
+
+  Head = Tx->Head;
+  SmdWriteRing (TxFifo, FifoSize, &Head, Pkt, sizeof (Pkt));
+  MemoryFence ();
+  Tx->Head = Head;
+  SmdRingRpm ();
+
+  // Drain/wait briefly for RPM ACK (RX head advances)
+  for (Spin = 0; Spin < 2000; Spin++) {
+    if (Rx->Head != Rx->Tail) {
+      Rx->Tail = Rx->Head;
+      SmdRingRpm ();
+      break;
+    }
+    MicroSecondDelay (100);
+  }
+}
+
+STATIC
+VOID
+RpmEnableSdcc2Power (
+  VOID
+  )
+{
+  UINT32            TblSize;
+  UINT64            TblAddr;
+  CONST SMD_ALLOC_ELM *Elm;
+  UINT32            Count;
+  UINT32            I;
+  INT32             Cid;
+  UINT32            InfoSize;
+  UINT32            FifoSize;
+  UINT64            InfoAddr;
+  UINT64            FifoAddr;
+  SMD_HALF_CH_WORD  *Tx;
+  SMD_HALF_CH_WORD  *Rx;
+  UINTN             Spin;
+
+  TblSize = 0;
+  TblAddr = SmemGetItem (13, &TblSize);
+  if ((TblAddr == 0) || (TblSize < sizeof (SMD_ALLOC_ELM))) {
+    DEBUG ((DEBUG_ERROR, "RPM_SMD: SMEM item 13 missing (init=%08x)\n",
+            MmioRead32 (SMEM_BASE_ADDR + 0xC0)));
+    return;
+  }
+
+  Cid   = -1;
+  Elm   = (CONST SMD_ALLOC_ELM *)(UINTN)TblAddr;
+  Count = TblSize / sizeof (SMD_ALLOC_ELM);
+  for (I = 0; I < Count; I++) {
+    if ((AsciiStrnCmp (Elm[I].Name, "rpm_requests", 12) == 0) &&
+        ((Elm[I].Ctype & 0xFFU) == 0x0FU))
+    {
+      Cid = (INT32)Elm[I].Cid;
+      break;
+    }
+  }
+  if (Cid < 0) {
+    DEBUG ((DEBUG_ERROR, "RPM_SMD: rpm_requests channel not found in %u entries\n", Count));
+    return;
+  }
+
+  InfoSize = 0;
+  FifoSize = 0;
+  InfoAddr = SmemGetItem (14 + (UINT32)Cid, &InfoSize);
+  FifoAddr = SmemGetItem (338 + (UINT32)Cid, &FifoSize);
+  if ((InfoAddr == 0) || (FifoAddr == 0) || (FifoSize < 256)) {
+    DEBUG ((DEBUG_ERROR, "RPM_SMD: cid=%d info=%lx(%u) fifo=%lx(%u) invalid\n",
+            Cid, InfoAddr, InfoSize, FifoAddr, FifoSize));
+    return;
+  }
+
+  FifoSize /= 2; // First half = TX (APPS->RPM), second half = RX (RPM->APPS)
+  Tx = (SMD_HALF_CH_WORD *)(UINTN)InfoAddr;
+  Rx = Tx + 1;
+
+  // Open SMD channel if not already OPENED (state 2)
+  if (Tx->State != 2U) {
+    Tx->FDsr   = 1;
+    Tx->FCts   = 1;
+    Tx->FCd    = 1;
+    Tx->FState = 1;
+    Tx->State  = 1U; // OPENING
+    SmdRingRpm ();
+    for (Spin = 0; Spin < 2000; Spin++) {
+      if ((Rx->State == 1U) || (Rx->State == 2U)) {
+        break;
+      }
+      MicroSecondDelay (100);
+    }
+    Tx->State  = 2U; // OPENED
+    Tx->FState = 1;
+    SmdRingRpm ();
+    for (Spin = 0; Spin < 2000; Spin++) {
+      if (Rx->State == 2U) {
+        break;
+      }
+      MicroSecondDelay (100);
+    }
+  }
+
+  DEBUG ((DEBUG_ERROR, "RPM_SMD: cid=%d info=%lx fifo=%lx(%u) tx=%u rx=%u\n",
+          Cid, InfoAddr, FifoAddr, FifoSize, Tx->State, Rx->State));
+
+  if ((Tx->State == 2U) && (Rx->State == 2U)) {
+    // Enable PM8950 LDO11 (2.95V SD VDD) and LDO12 (2.95V SD VDD-IO)
+    RpmSendLdoVote (Tx, Rx, FifoAddr, FifoSize, 1U, 11U, 2950000U);
+    RpmSendLdoVote (Tx, Rx, FifoAddr, FifoSize, 2U, 12U, 2950000U);
+    MicroSecondDelay (15000);
+    // Configure SDC2 TLMM pad drive/pull (10mA/16mA drive, pull-up on CMD/DAT)
+    MmioWrite32 (TLMM_SDC2_HDRV_PULL_CTL, 0x00016DFFU);
+    DEBUG ((DEBUG_ERROR, "RPM_SMD: voted LDO11+LDO12 2.95V (tx_h=%u rx_h=%u tlmm=%08x)\n",
+            Tx->Head, Rx->Head, MmioRead32 (TLMM_SDC2_HDRV_PULL_CTL)));
+  }
+}
+
 STATIC
 VOID
 EnableGccBranch (
@@ -385,11 +630,46 @@ ProbeSdccController (
       }
     }
   } else {
+    // Full SDHC/SDXC microSD init (CMD0 -> CMD8 -> ACMD41 -> CMD2 -> CMD3 -> CMD7 -> CMD17(0))
+    UINT32  Rca;
+
     Resp = 0;
     SdhciSimpleCmd (Hc, 0, 0, 0x00U, &Resp);
     MicroSecondDelay (5000);
     if (SdhciSimpleCmd (Hc, 8, 0x1AAU, 0x1AU, &Resp)) {
       DEBUG ((DEBUG_ERROR, "  SDCC2 microSD CMD8 OK! resp=%08x\n", Resp));
+      for (Spin = 0; Spin < 200; Spin++) {
+        if (!SdhciSimpleCmd (Hc, 55, 0, 0x1AU, &Resp)) {
+          break;
+        }
+        if (SdhciSimpleCmd (Hc, 41, 0x40FF8000U, 0x02U, &Resp) && ((Resp & 0x80000000U) != 0)) {
+          break;
+        }
+        MicroSecondDelay (5000);
+      }
+      DEBUG ((DEBUG_ERROR, "  SDCC2 ACMD41 OCR=%08x (tries=%u)\n", Resp, (UINT32)Spin));
+      if ((Resp & 0x80000000U) != 0) {
+        if (SdhciSimpleCmd (Hc, 2, 0, 0x09U, &Resp) &&
+            SdhciSimpleCmd (Hc, 3, 0, 0x1AU, &Resp))
+        {
+          Rca = Resp & 0xFFFF0000U;
+          if (SdhciSimpleCmd (Hc, 7, Rca, 0x1BU, &Resp)) {
+            SdhciSimpleCmd (Hc, 16, 512, 0x1AU, &Resp);
+            SetSdhciClock (Hc, 0x0001U); // 9.6 MHz DS
+            SdhciSimpleCmd (Hc, 13, Rca, 0x1AU, &Resp);
+            DEBUG ((DEBUG_ERROR, "  SDCC2 microSD TRAN! RCA=%04x CMD13=%08x\n", Rca >> 16, Resp));
+            if (SdhciReadSectorPio (Hc, 0, Sec)) {
+              DEBUG ((
+                DEBUG_ERROR,
+                "  SDCC2 LBA0 MBR: %02x %02x (part0 type=%02x start=%08x len=%08x)\n",
+                Sec[510], Sec[511], Sec[450],
+                ReadUnaligned32 ((CONST UINT32 *)(Sec + 454)),
+                ReadUnaligned32 ((CONST UINT32 *)(Sec + 458))
+                ));
+            }
+          }
+        }
+      }
     }
   }
 }
@@ -403,6 +683,7 @@ KenzoEnableSdccClocks (
   EnableGccSdcc ("SDCC1", GCC_SDCC1_APPS_CMD_RCGR, GCC_SDCC1_APPS_CFG_RCGR, GCC_SDCC1_APPS_CBCR, GCC_SDCC1_AHB_CBCR);
   EnableGccBranch (GCC_SDCC1_ICE_CORE_CBCR);
   EnableGccSdcc ("SDCC2", GCC_SDCC2_APPS_CMD_RCGR, GCC_SDCC2_APPS_CFG_RCGR, GCC_SDCC2_APPS_CBCR, GCC_SDCC2_AHB_CBCR);
+  RpmEnableSdcc2Power ();
 }
 
 // Must match KenzoPlatformMem.c / UniXNURamDiskDxe.c

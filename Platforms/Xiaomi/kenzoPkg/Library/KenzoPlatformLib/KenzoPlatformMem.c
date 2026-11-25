@@ -22,8 +22,15 @@ STATIC CONST EFI_GUID  mEntryArgHobGuid = {
 };
 
 STATIC ARM_MEMORY_REGION_DESCRIPTOR  mKenzoMemoryTable[] = {
-  // Peripheral MMIO space: GCC (0x01800000), MDP5 (0x01A00000), SDHCI (0x07824900),
-  // UART (0x078B0000), GICv2 (0x0B000000). Page 0 is left unmapped.
+  // RPM Message RAM (0x00060000, 32 KiB) for RPM-SMD regulator votes (microSD LDO11/LDO12)
+  {
+    0x00060000,
+    0x00060000,
+    0x00010000,
+    ARM_MEMORY_REGION_ATTRIBUTE_DEVICE
+  },
+  // Peripheral MMIO space: TLMM (0x01000000), GCC (0x01800000), MDP5 (0x01A00000),
+  // SDHCI (0x07824900/0x07864900), UART (0x078B0000), GICv2 (0x0B000000). Page 0 is left unmapped.
   {
     0x01000000,
     0x01000000,
@@ -51,7 +58,14 @@ STATIC ARM_MEMORY_REGION_DESCRIPTOR  mKenzoMemoryTable[] = {
     0x00B00000,
     ARM_MEMORY_REGION_ATTRIBUTE_WRITE_BACK
   },
-  // Note: 0x86300000..0x867FFFFF (other_ext_region 5M) is unmapped
+  // SMEM (1 MiB at 0x86300000, inside other_ext_region) - Non-Cacheable for RPM-SMD
+  {
+    0x86300000,
+    0x86300000,
+    0x00100000,
+    ARM_MEMORY_REGION_ATTRIBUTE_UNCACHED_UNBUFFERED
+  },
+  // Note: 0x86400000..0x867FFFFF (remaining other_ext_region 4M) is unmapped
   // Interstitial RAM 1 (4 MiB)
   {
     0x86800000,
