@@ -28,7 +28,7 @@
   ArmPlatformLib|Platforms/Xiaomi/kenzoPkg/Library/KenzoPlatformLib/KenzoPlatformLib.inf
   ArmSmcLib|MdePkg/Library/ArmSmcLib/ArmSmcLib.inf
   ArmSvcLib|MdePkg/Library/ArmSvcLib/ArmSvcLib.inf
-  ArmGenericTimerCounterLib|ArmPkg/Library/ArmGenericTimerVirtCounterLib/ArmGenericTimerVirtCounterLib.inf
+  ArmGenericTimerCounterLib|Platforms/Xiaomi/kenzoPkg/Library/KenzoArchTimerCounterLib/KenzoArchTimerCounterLib.inf
   ArmHvcLib|ArmPkg/Library/ArmHvcLib/ArmHvcLib.inf
   ArmMonitorLib|ArmPkg/Library/ArmMonitorLib/ArmMonitorLib.inf
   ArmTransferListLib|ArmPkg/Library/ArmTransferListLib/ArmTransferListLib.inf

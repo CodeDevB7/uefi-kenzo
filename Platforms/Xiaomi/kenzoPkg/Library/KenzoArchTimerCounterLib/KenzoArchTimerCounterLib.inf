@@ -1,0 +1,25 @@
+## @file
+#  ARM Generic Timer Virtual Counter library for Xiaomi Redmi Note 3 (Kenzo).
+#  Falls back to 19.2 MHz (verified from kenzo.dtb clock-frequency = 0x0124F800)
+#  when Qualcomm TZ/LK leaves CNTFRQ_EL0 unprogrammed (0).
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010019
+  BASE_NAME                      = KenzoArchTimerCounterLib
+  FILE_GUID                      = 5B9E4C21-3A18-4D7E-8C2F-91A4B7E2D603
+  MODULE_TYPE                    = BASE
+  VERSION_STRING                 = 1.0
+  LIBRARY_CLASS                  = ArmGenericTimerCounterLib
+
+[Sources]
+  KenzoArchTimerCounterLib.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  ArmPkg/ArmPkg.dec
+
+[LibraryClasses]
+  ArmLib
