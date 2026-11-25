@@ -216,6 +216,11 @@ ArmPlatformGetVirtualMemoryMap (
     NULL
     );
 
+  // Protect high-RAM initrd/ramdisk window (0xA0000000..0xAFFFFFFF, 256 MiB)
+  // loaded by LittleKernel aboot (ramdisk_offset=0x20000000) so DXE/DarwinBoot
+  // never overwrite the UniXNU FAT payload before ExitBootServices.
+  BuildMemoryAllocationHob (0xA0000000, 0x10000000, EfiBootServicesData);
+
   // Optional ramoops carveout (4 MiB at 0xDFC00000)
   BuildMemoryAllocationHob (0xDFC00000, 0x00400000, EfiReservedMemoryType);
 

@@ -150,9 +150,9 @@
   # BDS / Console
   gEfiMdePkgTokenSpaceGuid.PcdPlatformBootTimeOut|1
 
-  # Debug console (printed to on-screen KenzoFbSerialPortLib once GOP is ready)
+  # Debug console (DEBUG_ERROR only so graphical UniXNU menu stays clean)
   gEfiMdePkgTokenSpaceGuid.PcdDebugPropertyMask|0x2F
-  gEfiMdePkgTokenSpaceGuid.PcdDebugPrintErrorLevel|0x80000046
+  gEfiMdePkgTokenSpaceGuid.PcdDebugPrintErrorLevel|0x80000000
 
   # Firmware identity
   gEfiMdeModulePkgTokenSpaceGuid.PcdFirmwareVendor|L"CodeDevB7"
