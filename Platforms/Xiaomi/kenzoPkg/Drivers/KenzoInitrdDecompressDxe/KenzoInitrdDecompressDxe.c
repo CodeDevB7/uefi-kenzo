@@ -12,11 +12,101 @@
 #include <Library/DebugLib.h>
 #include <Library/FdtLib.h>
 #include <Library/HobLib.h>
+#include <Library/IoLib.h>
 #include <Library/MemoryAllocationLib.h>
 
 #define KENZO_KLZM_MAGIC          0x4D5A4C4BU  // "KLZM"
 #define KENZO_HIGH_INITRD_BASE    0xA0000000ULL
 #define KENZO_HIGH_INITRD_MAX     0x10000000U  // 256 MiB protected window
+
+// MSM8956 GCC SDCC1 (eMMC @ 0x07824900) and SDCC2 (microSD @ 0x07864900) clocks
+#define GCC_SDCC1_APPS_CMD_RCGR   0x01842004ULL
+#define GCC_SDCC1_APPS_CFG_RCGR   0x01842008ULL
+#define GCC_SDCC1_APPS_CBCR       0x01842018ULL
+#define GCC_SDCC1_AHB_CBCR        0x0184201CULL
+#define GCC_SDCC1_ICE_CORE_CBCR   0x0185D014ULL
+
+#define GCC_SDCC2_APPS_CMD_RCGR   0x01843004ULL
+#define GCC_SDCC2_APPS_CFG_RCGR   0x01843008ULL
+#define GCC_SDCC2_APPS_CBCR       0x01843018ULL
+#define GCC_SDCC2_AHB_CBCR        0x0184301CULL
+
+STATIC
+VOID
+EnableGccBranch (
+  IN UINT64  CbcrAddr
+  )
+{
+  UINT32  Val;
+  UINTN   Spin;
+
+  Val = MmioRead32 (CbcrAddr);
+  if ((Val & BIT0) == 0) {
+    MmioWrite32 (CbcrAddr, Val | BIT0);
+  }
+
+  for (Spin = 0; Spin < 50000; Spin++) {
+    if ((MmioRead32 (CbcrAddr) & BIT31) == 0) {
+      break;
+    }
+  }
+}
+
+STATIC
+VOID
+EnableGccSdcc (
+  IN CONST CHAR8  *Name,
+  IN UINT64       CmdRcgr,
+  IN UINT64       CfgRcgr,
+  IN UINT64       AppsCbcr,
+  IN UINT64       AhbCbcr
+  )
+{
+  UINT32  AhbBefore;
+  UINT32  AppsBefore;
+  UINTN   Spin;
+
+  AhbBefore  = MmioRead32 (AhbCbcr);
+  AppsBefore = MmioRead32 (AppsCbcr);
+
+  EnableGccBranch (AhbCbcr);
+  EnableGccBranch (AppsCbcr);
+
+  // If APPS branch still reports CLK_OFF, switch RCG cleanly to 19.2 MHz XO (src=0, div=0).
+  if ((MmioRead32 (AppsCbcr) & BIT31) != 0) {
+    MmioWrite32 (CfgRcgr, 0);
+    MmioWrite32 (CmdRcgr, MmioRead32 (CmdRcgr) | BIT0);
+    for (Spin = 0; Spin < 50000; Spin++) {
+      if ((MmioRead32 (CmdRcgr) & BIT0) == 0) {
+        break;
+      }
+    }
+    EnableGccBranch (AppsCbcr);
+  }
+
+  DEBUG ((
+    DEBUG_ERROR,
+    "KENZO_SDCC %a: AHB 0x%08x->0x%08x APPS 0x%08x->0x%08x RCG=0x%08x/0x%08x\n",
+    Name,
+    AhbBefore,
+    MmioRead32 (AhbCbcr),
+    AppsBefore,
+    MmioRead32 (AppsCbcr),
+    MmioRead32 (CmdRcgr),
+    MmioRead32 (CfgRcgr)
+    ));
+}
+
+STATIC
+VOID
+KenzoEnableSdccClocks (
+  VOID
+  )
+{
+  EnableGccSdcc ("SDCC1", GCC_SDCC1_APPS_CMD_RCGR, GCC_SDCC1_APPS_CFG_RCGR, GCC_SDCC1_APPS_CBCR, GCC_SDCC1_AHB_CBCR);
+  EnableGccBranch (GCC_SDCC1_ICE_CORE_CBCR);
+  EnableGccSdcc ("SDCC2", GCC_SDCC2_APPS_CMD_RCGR, GCC_SDCC2_APPS_CFG_RCGR, GCC_SDCC2_APPS_CBCR, GCC_SDCC2_AHB_CBCR);
+}
 
 // Must match KenzoPlatformMem.c / UniXNURamDiskDxe.c
 STATIC CONST EFI_GUID  mEntryArgHobGuid = {
@@ -92,6 +182,8 @@ KenzoInitrdDecompressEntry (
   UINT32             ScratchSize;
   VOID               *Scratch;
   RETURN_STATUS      RetStatus;
+
+  KenzoEnableSdccClocks ();
 
   Hob = GetFirstGuidHob (&mEntryArgHobGuid);
   if ((Hob == NULL) || (GET_GUID_HOB_DATA_SIZE (Hob) < sizeof (UINT64))) {

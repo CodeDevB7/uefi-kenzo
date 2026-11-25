@@ -27,6 +27,7 @@
   DebugLib
   FdtLib
   HobLib
+  IoLib
   MemoryAllocationLib
   UefiDriverEntryPoint
 
