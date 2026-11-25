@@ -20,15 +20,7 @@ PlatformBootManagerBeforeConsole (
   VOID
   )
 {
-  // Thin MAGENTA bar (rows 40..80, 32-bit BGRX at 0x83200000) proves BdsDxe started!
-  {
-    volatile UINT32  *Fb32 = (volatile UINT32 *)(UINTN)0x83200000ULL;
-    UINTN            Idx;
-    for (Idx = (1080 * 40); Idx < (1080 * 80); Idx++) {
-      Fb32[Idx] = 0x00FF00FF;
-    }
-  }
-
+  DEBUG ((DEBUG_INFO, "KenzoPlatformBootManager: BeforeConsole\n"));
   EfiEventGroupSignal (&gEfiEndOfDxeEventGroupGuid);
   EfiBootManagerConnectAll ();
 }

@@ -95,18 +95,6 @@ ArmPlatformGetVirtualMemoryMap (
 
   ASSERT (VirtualMemoryMap != NULL);
 
-  // Bring-up visual breadcrumb Band 2 (GREEN, rows 80..160 in 24-bit RGB888 at 0x83200000)
-  // Proves PeilessSec reached MemoryPeim right before ArmConfigureMmu.
-  {
-    volatile UINT8  *Fb = (volatile UINT8 *)(UINTN)(0x83200000ULL + (1080 * 80 * 3));
-    UINTN           Idx;
-    for (Idx = 0; Idx < (1080 * 80 * 3); Idx += 3) {
-      Fb[Idx + 0] = 0x00;
-      Fb[Idx + 1] = 0xFF;
-      Fb[Idx + 2] = 0x00;
-    }
-  }
-
   // 1. Publish incoming x0 (FDT address) for UniXNURamDiskDxe
   FdtAddress = mIncomingFdtAddress;
   BuildGuidDataHob (&mEntryArgHobGuid, &FdtAddress, sizeof (UINT64));

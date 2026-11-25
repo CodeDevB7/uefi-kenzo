@@ -1,0 +1,24 @@
+## @file
+#  On-screen 32-bit framebuffer SerialPortLib for Xiaomi Redmi Note 3 (Kenzo).
+#  Renders DXE DEBUG/ASSERT/Exception output directly onto the MDP5 BGRX8888
+#  framebuffer once KenzoSimpleFbDxe sets the ready magic at 0x831FFFF0.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010019
+  BASE_NAME                      = KenzoFbSerialPortLib
+  FILE_GUID                      = 7C2B8E14-9D4A-4C62-B3F1-6E8A2D5C901B
+  MODULE_TYPE                    = BASE
+  VERSION_STRING                 = 1.0
+  LIBRARY_CLASS                  = SerialPortLib
+
+[Sources]
+  KenzoFbSerialPortLib.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  BaseLib

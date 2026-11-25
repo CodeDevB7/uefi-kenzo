@@ -266,31 +266,21 @@ KenzoSimpleFbDxeInitialize (
   RETURN_STATUS  RetStatus;
   EFI_HANDLE     Handle;
 
-  // Bring-up visual breadcrumb Band 4 (BLUE, rows 240..320 in 24-bit RGB888 at 0x83200000)
-  // Proves DecompressFvs + DxeCore + DXE dispatch reached KenzoSimpleFbDxe!
-  {
-    volatile UINT8  *Fb = (volatile UINT8 *)(UINTN)(0x83200000ULL + (1080 * 240 * 3));
-    UINTN           Idx;
-    for (Idx = 0; Idx < (1080 * 80 * 3); Idx += 3) {
-      Fb[Idx + 0] = 0xFF;
-      Fb[Idx + 1] = 0x00;
-      Fb[Idx + 2] = 0x00;
-    }
-  }
-
   ProbeAndConfigureMdp5Splash (&FbBase, &Width, &Height);
   FbSize = (UINTN)Width * (UINTN)Height * 4;
 
   ZeroMem ((VOID *)(UINTN)FbBase, FbSize);
 
-  // Thin CYAN bar (rows 0..40, 32-bit BGRX) so we know KenzoSimpleFbDxe cleared & switched to 32-bit!
+  // Enable on-screen KenzoFbSerialPortLib console (shared state at 0x831FFFF0)
   {
-    volatile UINT32  *Fb32 = (volatile UINT32 *)(UINTN)FbBase;
-    UINTN            Idx;
-    for (Idx = 0; Idx < (Width * 40); Idx++) {
-      Fb32[Idx] = 0x0000FFFF;
-    }
+    volatile UINT32  *State = (volatile UINT32 *)(UINTN)0x831FFFF0ULL;
+    State[1] = 0;           // Col = 0
+    State[2] = 0;           // Row = 0
+    State[3] = 0;
+    State[0] = 0x4B464231U; // "KFB1" ready magic
   }
+
+  DEBUG ((DEBUG_INFO, "KenzoSimpleFb: GOP %dx%d BGRX8888 @ 0x%lx\n", Width, Height, FbBase));
 
   mModeInfo.Version              = 0;
   mModeInfo.HorizontalResolution = Width;

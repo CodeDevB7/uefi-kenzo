@@ -41,7 +41,7 @@
   CpuLib|MdePkg/Library/BaseCpuLib/BaseCpuLib.inf
   CustomizedDisplayLib|MdeModulePkg/Library/CustomizedDisplayLib/CustomizedDisplayLib.inf
   DebugAgentLib|MdeModulePkg/Library/DebugAgentLibNull/DebugAgentLibNull.inf
-  DebugLib|MdePkg/Library/BaseDebugLibNull/BaseDebugLibNull.inf
+  DebugLib|MdePkg/Library/BaseDebugLibSerialPort/BaseDebugLibSerialPort.inf
   DebugPrintErrorLevelLib|MdePkg/Library/BaseDebugPrintErrorLevelLib/BaseDebugPrintErrorLevelLib.inf
   DevicePathLib|MdePkg/Library/UefiDevicePathLib/UefiDevicePathLib.inf
   DxeMemoryProtectionHobLib|MdeModulePkg/Library/MemoryProtectionHobLib/DxeMemoryProtectionHobLib.inf
@@ -73,7 +73,7 @@
   ResetUtilityLib|MdeModulePkg/Library/ResetUtilityLib/ResetUtilityLib.inf
   SecurityLockAuditLib|MdeModulePkg/Library/SecurityLockAuditLibNull/SecurityLockAuditLibNull.inf
   SecurityManagementLib|MdeModulePkg/Library/DxeSecurityManagementLib/DxeSecurityManagementLib.inf
-  SerialPortLib|MdePkg/Library/BaseSerialPortLibNull/BaseSerialPortLibNull.inf
+  SerialPortLib|Platforms/Xiaomi/kenzoPkg/Library/KenzoFbSerialPortLib/KenzoFbSerialPortLib.inf
   SortLib|MdeModulePkg/Library/UefiSortLib/UefiSortLib.inf
   SynchronizationLib|MdePkg/Library/BaseSynchronizationLib/BaseSynchronizationLib.inf
   TimeBaseLib|EmbeddedPkg/Library/TimeBaseLib/TimeBaseLib.inf
@@ -92,6 +92,7 @@
   VariablePolicyLib|MdeModulePkg/Library/VariablePolicyLib/VariablePolicyLib.inf
 
 [LibraryClasses.common.SEC]
+  DebugLib|MdePkg/Library/BaseDebugLibNull/BaseDebugLibNull.inf
   ExtractGuidedSectionLib|EmbeddedPkg/Library/PrePiExtractGuidedSectionLib/PrePiExtractGuidedSectionLib.inf
   HobLib|EmbeddedPkg/Library/PrePiHobLib/PrePiHobLib.inf
   MemoryAllocationLib|EmbeddedPkg/Library/PrePiMemoryAllocationLib/PrePiMemoryAllocationLib.inf
@@ -148,6 +149,10 @@
 
   # BDS / Console
   gEfiMdePkgTokenSpaceGuid.PcdPlatformBootTimeOut|3
+
+  # Debug console (printed to on-screen KenzoFbSerialPortLib once GOP is ready)
+  gEfiMdePkgTokenSpaceGuid.PcdDebugPropertyMask|0x2F
+  gEfiMdePkgTokenSpaceGuid.PcdDebugPrintErrorLevel|0x80000046
 
   # Firmware identity
   gEfiMdeModulePkgTokenSpaceGuid.PcdFirmwareVendor|L"CodeDevB7"
