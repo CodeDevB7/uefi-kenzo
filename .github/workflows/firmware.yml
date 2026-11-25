@@ -56,11 +56,10 @@ jobs:
           ./unixnu defconfig kenzo_defconfig -D ../device
           ./unixnu build firmware -D ../device --uefi ../uefi-kenzo --target DEBUG -j "$(nproc)"
           # Build BootShim (text_offset=0x80000, image_size=0 for stock Kenzo LK aboot) and pack boot.img
-          TOOLCHAIN="$(pwd)/out/kenzo/ipados-17.7.11-21H461/kenzo/toolchain"
-          "$TOOLCHAIN/clang" -target aarch64-none-elf -c -x assembler-with-cpp \
+          clang -target aarch64-none-elf -c -x assembler-with-cpp \
             -DREQUIRES_KERNEL_HEADER=1 -DFD_BASE=0x9FC00000 -DFD_SIZE=0x00300000 \
             -o ../BootShim.o ../uefi-kenzo/BootShim/BootShim.S
-          "$TOOLCHAIN/ld.lld" -Ttext=0x80080000 --oformat=binary -o ../BootShim.bin ../BootShim.o
+          ld.lld -Ttext=0x80080000 --oformat=binary -o ../BootShim.bin ../BootShim.o
           cat ../BootShim.bin ../uefi-kenzo/Build/kenzoPkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd | gzip -9 > ../Image.gz
           cat ../Image.gz ../uefi-kenzo/Resources/DTBs/kenzo.dtb > ../Image.gz-dtb
           printf '\x00\x00\x00\x00' > ../dummy-ramdisk.bin
