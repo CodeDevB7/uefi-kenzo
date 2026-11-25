@@ -200,6 +200,10 @@
 
   # Display & Console
   Platforms/Xiaomi/kenzoPkg/Drivers/KenzoSimpleFbDxe/KenzoSimpleFbDxe.inf
+  Platforms/Xiaomi/kenzoPkg/Drivers/KenzoInitrdDecompressDxe/KenzoInitrdDecompressDxe.inf {
+    <LibraryClasses>
+      NULL|MdeModulePkg/Library/LzmaCustomDecompressLib/LzmaCustomDecompressLib.inf
+  }
   MdeModulePkg/Universal/Console/ConPlatformDxe/ConPlatformDxe.inf
   MdeModulePkg/Universal/Console/ConSplitterDxe/ConSplitterDxe.inf
   MdeModulePkg/Universal/Console/GraphicsConsoleDxe/GraphicsConsoleDxe.inf

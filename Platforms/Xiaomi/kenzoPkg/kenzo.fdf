@@ -40,6 +40,7 @@ READ_LOCK_STATUS   = TRUE
   APRIORI DXE {
     INF MdeModulePkg/Universal/PCD/Dxe/Pcd.inf
     INF Platforms/Xiaomi/kenzoPkg/Drivers/KenzoSimpleFbDxe/KenzoSimpleFbDxe.inf
+    INF Platforms/Xiaomi/kenzoPkg/Drivers/KenzoInitrdDecompressDxe/KenzoInitrdDecompressDxe.inf
     INF ArmPkg/Drivers/CpuDxe/CpuDxe.inf
     INF ArmPkg/Drivers/ArmGicDxe/ArmGicV2Dxe.inf
     INF ArmPkg/Drivers/TimerDxe/TimerDxe.inf
@@ -67,6 +68,7 @@ READ_LOCK_STATUS   = TRUE
 
   # Display & Console
   INF Platforms/Xiaomi/kenzoPkg/Drivers/KenzoSimpleFbDxe/KenzoSimpleFbDxe.inf
+  INF Platforms/Xiaomi/kenzoPkg/Drivers/KenzoInitrdDecompressDxe/KenzoInitrdDecompressDxe.inf
   INF MdeModulePkg/Universal/Console/ConPlatformDxe/ConPlatformDxe.inf
   INF MdeModulePkg/Universal/Console/ConSplitterDxe/ConSplitterDxe.inf
   INF MdeModulePkg/Universal/Console/GraphicsConsoleDxe/GraphicsConsoleDxe.inf
