@@ -36,6 +36,16 @@ ArmPlatformInitialize (
   IN UINTN  MpId
   )
 {
+  // Bring-up visual breadcrumb Band 1 (RED, rows 0..80 in 24-bit RGB888 at 0x83200000)
+  // Proves PeilessSec CEntryPoint was reached.
+  volatile UINT8  *Fb = (volatile UINT8 *)(UINTN)0x83200000ULL;
+  UINTN           Idx;
+  for (Idx = 0; Idx < (1080 * 80 * 3); Idx += 3) {
+    Fb[Idx + 0] = 0x00;
+    Fb[Idx + 1] = 0x00;
+    Fb[Idx + 2] = 0xFF;
+  }
+
   return RETURN_SUCCESS;
 }
 

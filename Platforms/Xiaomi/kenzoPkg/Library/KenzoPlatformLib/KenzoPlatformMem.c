@@ -37,12 +37,12 @@ STATIC ARM_MEMORY_REGION_DESCRIPTOR  mKenzoMemoryTable[] = {
     0x03000000,
     ARM_MEMORY_REGION_ATTRIBUTE_WRITE_BACK
   },
-  // Continuous splash framebuffer (40 MiB, NT35532 1080p)
+  // Continuous splash framebuffer (40 MiB, NT35532 1080p) - Normal Non-Cacheable for MDP5 DMA
   {
     0x83000000,
     0x83000000,
     0x02800000,
-    ARM_MEMORY_REGION_ATTRIBUTE_WRITE_THROUGH
+    ARM_MEMORY_REGION_ATTRIBUTE_UNCACHED_UNBUFFERED
   },
   // Low RAM chunk (11 MiB)
   {
@@ -94,6 +94,18 @@ ArmPlatformGetVirtualMemoryMap (
   EFI_RESOURCE_ATTRIBUTE_TYPE  ReservedAttributes;
 
   ASSERT (VirtualMemoryMap != NULL);
+
+  // Bring-up visual breadcrumb Band 2 (GREEN, rows 80..160 in 24-bit RGB888 at 0x83200000)
+  // Proves PeilessSec reached MemoryPeim right before ArmConfigureMmu.
+  {
+    volatile UINT8  *Fb = (volatile UINT8 *)(UINTN)(0x83200000ULL + (1080 * 80 * 3));
+    UINTN           Idx;
+    for (Idx = 0; Idx < (1080 * 80 * 3); Idx += 3) {
+      Fb[Idx + 0] = 0x00;
+      Fb[Idx + 1] = 0xFF;
+      Fb[Idx + 2] = 0x00;
+    }
+  }
 
   // 1. Publish incoming x0 (FDT address) for UniXNURamDiskDxe
   FdtAddress = mIncomingFdtAddress;

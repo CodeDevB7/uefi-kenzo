@@ -4,10 +4,12 @@ _Head:
 
 #if REQUIRES_KERNEL_HEADER == 1
 _StackBase:
-  .quad FD_BASE         /* Text Offset */
+  /* Stock Kenzo LK aboot adds text_offset to 0x80000000 in 32-bit arithmetic;
+   * using FD_BASE (0x9FC00000) overflows to 0x1FC00000. Use stock 0x80000. */
+  .quad 0x80000         /* Text Offset */
 
 _StackSize:
-  .quad (_Payload - _Head) + FD_SIZE  /* Image Size */
+  .quad 0               /* Image Size (matches stock Kenzo kernel) */
   .quad 0               /* Flags */
   .quad 0               /* Reserved */
   .quad 0               /* Reserved */
@@ -18,6 +20,8 @@ _StackSize:
 
 _Start:
   /* Preserve x0 (incoming FDT pointer from LittleKernel aboot) */
+  /* Zero TPIDRRO_EL0 so PeilessSec does not dereference garbage TransferList */
+  msr   tpidrro_el0, xzr
   mov   x4, x1
   ldr   x5, =FD_BASE
   cmp   x4, x5

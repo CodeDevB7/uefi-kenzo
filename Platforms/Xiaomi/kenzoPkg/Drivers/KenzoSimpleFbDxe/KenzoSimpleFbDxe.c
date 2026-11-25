@@ -266,6 +266,18 @@ KenzoSimpleFbDxeInitialize (
   RETURN_STATUS  RetStatus;
   EFI_HANDLE     Handle;
 
+  // Bring-up visual breadcrumb Band 3 (BLUE, rows 160..240 in 24-bit RGB888 at 0x83200000)
+  // Proves ArmConfigureMmu + DecompressFvs + DxeCore + DXE dispatch reached KenzoSimpleFbDxe.
+  {
+    volatile UINT8  *Fb = (volatile UINT8 *)(UINTN)(0x83200000ULL + (1080 * 160 * 3));
+    UINTN           Idx;
+    for (Idx = 0; Idx < (1080 * 80 * 3); Idx += 3) {
+      Fb[Idx + 0] = 0xFF;
+      Fb[Idx + 1] = 0x00;
+      Fb[Idx + 2] = 0x00;
+    }
+  }
+
   ProbeAndConfigureMdp5Splash (&FbBase, &Width, &Height);
   FbSize = (UINTN)Width * (UINTN)Height * 4;
 
