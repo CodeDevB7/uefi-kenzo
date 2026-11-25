@@ -41,7 +41,9 @@
 #define SMEM_BASE_ADDR            0x86300000ULL
 #define SMEM_HEAP_TOC_OFFSET      0x000000D0ULL
 #define APCS_IPC_REG              0x0B011008ULL
-#define TLMM_SDC2_HDRV_PULL_CTL   0x0110A000ULL
+// Verified from stock Kenzo Linux (msm_tlmm_8916 sdc_data_8916):
+// 0x01109000 = TLMM_SDC2_HDRV_PULL_CTL (microSD), 0x0110A000 = TLMM_SDC1 (eMMC)!
+#define TLMM_SDC2_HDRV_PULL_CTL   0x01109000ULL
 
 typedef struct {
   UINT32  Allocated;
@@ -285,40 +287,24 @@ RpmEnableSdcc2Power (
 
   if ((Tx->State == 2U) && (Rx->State == 2U)) {
     UINT32  RxStart;
-    UINT32  RxEnd;
-    UINT32  W;
-    UINT8   ReplyBuf[104];
+    UINT32  RxMid;
+    UINT32  TlmmBefore;
+    UINT32  TlmmAfter;
     // Drain any stale RX bytes left by aboot first
     Rx->Tail = Rx->Head;
     RxStart  = Rx->Head;
     // Enable PM8950 LDO11 (2.95V SD VDD, 800mA HPM) and LDO12 (2.95V SD VDD-IO, 22mA HPM)
     RpmSendLdoVote (Tx, Rx, FifoAddr, FifoSize, 1U, 11U, 2950000U, 800U);
-    RxEnd = Rx->Head;
-    // Copy the actual reply packet at RxEnd - 80 (skipping any 40-byte aboot reply)
-    ZeroMem (ReplyBuf, sizeof (ReplyBuf));
-    for (W = 0; W < 24; W++) {
-      UINT32  BaseOff = (RxEnd >= 80U) ? (RxEnd - 80U) : 0U;
-      UINT32  Off = (BaseOff + W * 4) % FifoSize;
-      ((UINT32 *)ReplyBuf)[W] = MmioRead32 (FifoAddr + FifoSize + Off);
-    }
+    RxMid = Rx->Head;
     RpmSendLdoVote (Tx, Rx, FifoAddr, FifoSize, 2U, 12U, 2950000U, 22U);
-    MicroSecondDelay (30000);
-    DEBUG ((DEBUG_ERROR, "RPM_SMD: tx=%u/%u rx=%u->%u->%u\n",
-            Tx->Tail, Tx->Head, RxStart, RxEnd, Rx->Head));
-    DEBUG ((DEBUG_ERROR, "RPM_RX1: len=%u hdr=%08x,%08x k0=%08x,%08x,%08x k1=%08x,%08x\n",
-            ((UINT32 *)ReplyBuf)[0], ((UINT32 *)ReplyBuf)[5], ((UINT32 *)ReplyBuf)[6],
-            ((UINT32 *)ReplyBuf)[7], ((UINT32 *)ReplyBuf)[8], ((UINT32 *)ReplyBuf)[9],
-            ((UINT32 *)ReplyBuf)[10], ((UINT32 *)ReplyBuf)[11]));
-    {
-      UINT32  B;
-      for (B = 40; B < 80; B++) {
-        if ((ReplyBuf[B] < 0x20) || (ReplyBuf[B] > 0x7E)) {
-          ReplyBuf[B] = '.';
-        }
-      }
-      ReplyBuf[80] = 0;
-      DEBUG ((DEBUG_ERROR, "RPM_TXT: %a\n", (CHAR8 *)(ReplyBuf + 40)));
-    }
+    // Program TLMM_SDC2_HDRV_PULL_CTL (0x01109000): clk=NP/16mA, cmd=PU/10mA, data=PU/10mA
+    TlmmBefore = MmioRead32 (TLMM_SDC2_HDRV_PULL_CTL);
+    MmioWrite32 (TLMM_SDC2_HDRV_PULL_CTL, 0x00001FE4U);
+    MemoryFence ();
+    TlmmAfter = MmioRead32 (TLMM_SDC2_HDRV_PULL_CTL);
+    MicroSecondDelay (20000);
+    DEBUG ((DEBUG_ERROR, "RPM_SMD: LDO11+12 OK (tx=%u/%u rx=%u->%u->%u tlmm2=%08x->%08x)\n",
+            Tx->Tail, Tx->Head, RxStart, RxMid, Rx->Head, TlmmBefore, TlmmAfter));
   }
 }
 
@@ -455,11 +441,20 @@ AckPwrctl (
   UINT32  St;
   UINT32  Ctl;
   UINTN   Spin;
+  UINTN   WaitClr;
 
   for (Spin = 0; Spin < 500; Spin++) {
     St = MmioRead32 (Core + 0xDC);
     if (St != 0) {
-      MmioWrite32 (Core + 0xE0, St);
+      // CORE_PWRCTL_CLEAR is 0xE4 (0xE0 is CORE_PWRCTL_MASK!)
+      MmioWrite32 (Core + 0xE4, St);
+      MemoryFence ();
+      for (WaitClr = 0; WaitClr < 500; WaitClr++) {
+        if ((MmioRead32 (Core + 0xDC) & St) == 0) {
+          break;
+        }
+        MicroSecondDelay (10);
+      }
       // BUS_SUCCESS = BIT0 (0x1), IO_SUCCESS = BIT2 (0x4). NEVER set BIT1 (BUS_FAIL)!
       Ctl = 0;
       if ((St & 0x03U) != 0) {
@@ -470,6 +465,7 @@ AckPwrctl (
       }
       if (Ctl != 0) {
         MmioWrite32 (Core + 0xE8, Ctl);
+        MemoryFence ();
       }
       MicroSecondDelay (100);
       return;
@@ -596,6 +592,8 @@ ProbeSdccController (
   AckPwrctl (Core);
 
   // 2. Full Qualcomm core reset + HC_MODE_EN (matches Linux sdhci-msm & U-Boot msm_sdhci)
+  MmioWrite32 (Core + 0x78, 0x00000000U); // Disable HC mode before CORE_SW_RST
+  MemoryFence ();
   MmioWrite32 (Core + 0x00, MmioRead32 (Core + 0x00) | BIT7); // CORE_SW_RST
   for (Spin = 0; Spin < 50000; Spin++) {
     if ((MmioRead32 (Core + 0x00) & BIT7) == 0) {
@@ -605,6 +603,7 @@ ProbeSdccController (
   }
   MmioWrite32 (Core + 0x78, 0x00000001U); // HC_MODE_EN
   MmioWrite32 (Core + 0x78, 0x00002001U); // HC_MODE_EN | FF_CLK_SW_RST_DIS
+  MemoryFence ();
   AckPwrctl (Core);
 
   // 3. Standard SDHCI SW_RST_ALL + Bus Power ON + Ack PWRCTL!
@@ -617,20 +616,23 @@ ProbeSdccController (
   }
   AckPwrctl (Core);
 
-  // Clear Qualcomm vendor DLL/HS200 select-in mux for clean 1-bit DS.
+  // Clear Qualcomm vendor DLL/HS200 select-in mux + CLK_PWRSAVE (BIT1) for clean 1-bit 400kHz DS.
   // For SDCC2 (microSD 2.95V), enable IO_PAD_PWR_SWITCH_EN (BIT15) with IO_PAD_PWR_SWITCH=0 (HIGH 2.95V).
   {
-    UINT32  Vs = MmioRead32 (Hc + 0x10C) & ~(0xFU << 18);
+    UINT32  Vs = MmioRead32 (Hc + 0x10C) & ~((0xFU << 18) | BIT1);
     if (!IsEmmc) {
       Vs = (Vs | BIT15) & ~BIT16;
     }
     MmioWrite32 (Hc + 0x10C, Vs);
+    MemoryFence ();
   }
   MmioWrite8  (Hc + 0x28, 0x00U); // 1-bit DS
   MmioWrite16 (Hc + 0x3E, 0x0000U);
   MmioWrite8  (Hc + 0x29, IsEmmc ? 0x0BU : 0x0FU); // 1.8V eMMC / 3.3V SD + Bus Power ON
+  MemoryFence ();
   AckPwrctl (Core);
   AckPwrctl (Core); // Ack both BUS_ON and IO_HIGH if queued
+  MicroSecondDelay (5000);
   SetSdhciClock (Hc, 0x0018U); // 19.2 MHz / (2*24) = 400 kHz
 
   DEBUG ((
@@ -838,14 +840,16 @@ KenzoInitrdDecompressEntry (
     return EFI_SUCCESS;
   }
 
+  // Always initialize SDCC1 (eMMC) and SDCC2 (microSD) into TRAN 9.6 MHz DS so XNU inherits live media.
+  ProbeSdccController ("SDCC1", SDCC1_CORE_BASE, SDCC1_HC_BASE, TRUE);
+  ProbeSdccController ("SDCC2", SDCC2_CORE_BASE, SDCC2_HC_BASE, FALSE);
+
   Start = ReadCells (StartProp, StartLen / 4);
   End   = ReadCells (EndProp, EndLen / 4);
   if ((End <= Start) || ((End - Start) < 18) ||
       (ReadUnaligned32 ((CONST UINT32 *)(UINTN)Start) != KENZO_KLZM_MAGIC))
   {
-    // Diagnostic UEFI-only boot (no KLZM ramdisk): probe SDCC1 & SDCC2 and hold on screen.
-    ProbeSdccController ("SDCC1", SDCC1_CORE_BASE, SDCC1_HC_BASE, TRUE);
-    ProbeSdccController ("SDCC2", SDCC2_CORE_BASE, SDCC2_HC_BASE, FALSE);
+    // Diagnostic UEFI-only boot (no KLZM ramdisk): hold screen so serial-less operator can read status.
     DEBUG ((DEBUG_ERROR, "KENZO_SDCC: diagnostic probe complete (holding screen)\n"));
     for (;;) {
       MicroSecondDelay (1000000);
