@@ -121,6 +121,8 @@ SdhciSimpleCmd (
   MmioWrite32 (Hc + 0x38, 0);
   MmioWrite32 (Hc + 0x34, 0xFFFFFFFFU);
   MmioWrite32 (Hc + 0x30, 0xFFFFFFFFU);
+  // Qualcomm SDCC4 requires >=3 SDCLK cycles (~50-100us at 400kHz) for INT_STAT clear to sync.
+  MicroSecondDelay (100);
   MmioWrite8  (Hc + 0x2E, 0x0EU);
   for (Spin = 0; Spin < 10000; Spin++) {
     if ((MmioRead32 (Hc + 0x24) & 0x3U) == 0) {
@@ -129,8 +131,7 @@ SdhciSimpleCmd (
     MicroSecondDelay (10);
   }
   MmioWrite32 (Hc + 0x08, Arg);
-  MmioWrite16 (Hc + 0x0C, 0);
-  MmioWrite16 (Hc + 0x0E, (UINT16)(((Cmd & 0x3FU) << 8) | Flags));
+  MmioWrite32 (Hc + 0x0C, ((UINT32)(((Cmd & 0x3FU) << 8) | Flags) << 16));
   Norm = 0;
   Err  = 0;
   for (Spin = 0; Spin < 20000; Spin++) {
@@ -146,6 +147,7 @@ SdhciSimpleCmd (
   }
   *RespOut = MmioRead32 (Hc + 0x10);
   MmioWrite32 (Hc + 0x30, 0xFFFFFFFFU);
+  MicroSecondDelay (100);
   if ((Err != 0) || ((Norm & 0x0001U) == 0)) {
     MmioWrite8 (Hc + 0x2F, 0x06U);
     for (Spin = 0; Spin < 5000; Spin++) {
@@ -234,6 +236,7 @@ SdhciReadSectorPio (
   MmioWrite32 (Hc + 0x38, 0);
   MmioWrite32 (Hc + 0x34, 0xFFFFFFFFU);
   MmioWrite32 (Hc + 0x30, 0xFFFFFFFFU);
+  MicroSecondDelay (100);
   MmioWrite8  (Hc + 0x2E, 0x0EU);
   for (Spin = 0; Spin < 10000; Spin++) {
     if ((MmioRead32 (Hc + 0x24) & 0x3U) == 0) {
@@ -244,8 +247,7 @@ SdhciReadSectorPio (
   MmioWrite16 (Hc + 0x04, 512);
   MmioWrite16 (Hc + 0x06, 1);
   MmioWrite32 (Hc + 0x08, Lba);
-  MmioWrite16 (Hc + 0x0C, 0x0010U); // Read, PIO
-  MmioWrite16 (Hc + 0x0E, (UINT16)((17U << 8) | 0x003AU));
+  MmioWrite32 (Hc + 0x0C, 0x0010U | ((UINT32)((17U << 8) | 0x003AU) << 16)); // Read PIO + CMD17
 
   Norm     = 0;
   Err      = 0;
