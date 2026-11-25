@@ -55,6 +55,18 @@ PrePeiCoreGetMpCoreInfo (
   OUT ARM_CORE_INFO  **ArmCoreTable
   )
 {
+  // Bring-up visual breadcrumb Band 3 (YELLOW, rows 160..240 in 24-bit RGB888 at 0x83200000)
+  // Proves MemoryPeim + ArmConfigureMmu SUCCEEDED!
+  {
+    volatile UINT8  *Fb = (volatile UINT8 *)(UINTN)(0x83200000ULL + (1080 * 160 * 3));
+    UINTN           Idx;
+    for (Idx = 0; Idx < (1080 * 80 * 3); Idx += 3) {
+      Fb[Idx + 0] = 0x00;
+      Fb[Idx + 1] = 0xFF;
+      Fb[Idx + 2] = 0xFF;
+    }
+  }
+
   if (ArmIsMpCore ()) {
     *CoreCount    = sizeof (mKenzoMpCoreInfoTable) / sizeof (ARM_CORE_INFO);
     *ArmCoreTable = mKenzoMpCoreInfoTable;

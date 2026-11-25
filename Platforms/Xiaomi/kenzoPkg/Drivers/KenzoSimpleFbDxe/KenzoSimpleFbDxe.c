@@ -266,10 +266,10 @@ KenzoSimpleFbDxeInitialize (
   RETURN_STATUS  RetStatus;
   EFI_HANDLE     Handle;
 
-  // Bring-up visual breadcrumb Band 3 (BLUE, rows 160..240 in 24-bit RGB888 at 0x83200000)
-  // Proves ArmConfigureMmu + DecompressFvs + DxeCore + DXE dispatch reached KenzoSimpleFbDxe.
+  // Bring-up visual breadcrumb Band 4 (BLUE, rows 240..320 in 24-bit RGB888 at 0x83200000)
+  // Proves DecompressFvs + DxeCore + DXE dispatch reached KenzoSimpleFbDxe!
   {
-    volatile UINT8  *Fb = (volatile UINT8 *)(UINTN)(0x83200000ULL + (1080 * 160 * 3));
+    volatile UINT8  *Fb = (volatile UINT8 *)(UINTN)(0x83200000ULL + (1080 * 240 * 3));
     UINTN           Idx;
     for (Idx = 0; Idx < (1080 * 80 * 3); Idx += 3) {
       Fb[Idx + 0] = 0xFF;
@@ -282,6 +282,15 @@ KenzoSimpleFbDxeInitialize (
   FbSize = (UINTN)Width * (UINTN)Height * 4;
 
   ZeroMem ((VOID *)(UINTN)FbBase, FbSize);
+
+  // Thin CYAN bar (rows 0..40, 32-bit BGRX) so we know KenzoSimpleFbDxe cleared & switched to 32-bit!
+  {
+    volatile UINT32  *Fb32 = (volatile UINT32 *)(UINTN)FbBase;
+    UINTN            Idx;
+    for (Idx = 0; Idx < (Width * 40); Idx++) {
+      Fb32[Idx] = 0x0000FFFF;
+    }
+  }
 
   mModeInfo.Version              = 0;
   mModeInfo.HorizontalResolution = Width;
