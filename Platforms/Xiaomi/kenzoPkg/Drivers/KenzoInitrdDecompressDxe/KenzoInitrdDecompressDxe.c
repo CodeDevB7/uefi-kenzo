@@ -284,18 +284,43 @@ RpmEnableSdcc2Power (
           Cid, InfoAddr, FifoAddr, FifoSize, Tx->State, Rx->State));
 
   if ((Tx->State == 2U) && (Rx->State == 2U)) {
+    UINT32  RxStart;
+    UINT32  RxEnd;
+    UINT32  W;
+    UINT8   ReplyBuf[104];
     UINT32  Sdc1Tlmm = MmioRead32 (0x01109000ULL);
     UINT32  Sdc2Before = MmioRead32 (TLMM_SDC2_HDRV_PULL_CTL);
     // Drain any stale RX bytes left by aboot first
     Rx->Tail = Rx->Head;
+    RxStart  = Rx->Head;
     // Enable PM8950 LDO11 (2.95V SD VDD, 800mA HPM) and LDO12 (2.95V SD VDD-IO, 22mA HPM)
     RpmSendLdoVote (Tx, Rx, FifoAddr, FifoSize, 1U, 11U, 2950000U, 800U);
+    RxEnd = Rx->Head;
+    // Copy first reply packet from RX FIFO for inspection
+    ZeroMem (ReplyBuf, sizeof (ReplyBuf));
+    for (W = 0; W < 24; W++) {
+      UINT32  Off = (RxStart + W * 4) % FifoSize;
+      ((UINT32 *)ReplyBuf)[W] = MmioRead32 (FifoAddr + FifoSize + Off);
+    }
     RpmSendLdoVote (Tx, Rx, FifoAddr, FifoSize, 2U, 12U, 2950000U, 22U);
     MicroSecondDelay (30000);
-    // Configure SDC2 TLMM pad drive/pull: CLK=16mA/no-pull, CMD=10mA/pull-up, DATA=10mA/pull-up
-    MmioWrite32 (TLMM_SDC2_HDRV_PULL_CTL, 0x00001FE4U);
-    DEBUG ((DEBUG_ERROR, "RPM_SMD: LDO11+12 HPM (tx=%u/%u rx=%u/%u tlmm1=%08x tlmm2=%08x->%08x)\n",
-            Tx->Tail, Tx->Head, Rx->Tail, Rx->Head, Sdc1Tlmm, Sdc2Before, MmioRead32 (TLMM_SDC2_HDRV_PULL_CTL)));
+    // Keep bootloader's pull-up bits (0x9FE4 already had CMD/DATA pull-up)
+    DEBUG ((DEBUG_ERROR, "RPM_SMD: tx=%u/%u rx=%u->%u->%u tlmm1=%08x tlmm2=%08x\n",
+            Tx->Tail, Tx->Head, RxStart, RxEnd, Rx->Head, Sdc1Tlmm, Sdc2Before));
+    DEBUG ((DEBUG_ERROR, "RPM_RX0: len=%u hdr=%08x,%08x k0=%08x,%08x,%08x k1=%08x,%08x\n",
+            ((UINT32 *)ReplyBuf)[0], ((UINT32 *)ReplyBuf)[5], ((UINT32 *)ReplyBuf)[6],
+            ((UINT32 *)ReplyBuf)[7], ((UINT32 *)ReplyBuf)[8], ((UINT32 *)ReplyBuf)[9],
+            ((UINT32 *)ReplyBuf)[10], ((UINT32 *)ReplyBuf)[11]));
+    if (((UINT32 *)ReplyBuf)[0] > 20) {
+      UINT32  B;
+      for (B = 48; B < 96; B++) {
+        if ((ReplyBuf[B] < 0x20) || (ReplyBuf[B] > 0x7E)) {
+          ReplyBuf[B] = '.';
+        }
+      }
+      ReplyBuf[96] = 0;
+      DEBUG ((DEBUG_ERROR, "RPM_TXT: %a\n", (CHAR8 *)(ReplyBuf + 48)));
+    }
   }
 }
 
