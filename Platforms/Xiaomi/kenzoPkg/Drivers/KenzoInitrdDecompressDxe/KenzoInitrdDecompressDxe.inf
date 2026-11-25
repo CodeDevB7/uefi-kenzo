@@ -29,6 +29,7 @@
   HobLib
   IoLib
   MemoryAllocationLib
+  TimerLib
   UefiDriverEntryPoint
 
 [Depex]

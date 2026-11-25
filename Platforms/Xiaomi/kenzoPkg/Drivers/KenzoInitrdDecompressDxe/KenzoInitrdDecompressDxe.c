@@ -14,12 +14,14 @@
 #include <Library/HobLib.h>
 #include <Library/IoLib.h>
 #include <Library/MemoryAllocationLib.h>
+#include <Library/TimerLib.h>
 
 #define KENZO_KLZM_MAGIC          0x4D5A4C4BU  // "KLZM"
 #define KENZO_HIGH_INITRD_BASE    0xA0000000ULL
 #define KENZO_HIGH_INITRD_MAX     0x10000000U  // 256 MiB protected window
 
 // MSM8956 GCC SDCC1 (eMMC @ 0x07824900) and SDCC2 (microSD @ 0x07864900) clocks
+// Verified directly against Kenzo stock Linux kernel (gcc-msm8976).
 #define GCC_SDCC1_APPS_CMD_RCGR   0x01842004ULL
 #define GCC_SDCC1_APPS_CFG_RCGR   0x01842008ULL
 #define GCC_SDCC1_APPS_CBCR       0x01842018ULL
@@ -30,6 +32,11 @@
 #define GCC_SDCC2_APPS_CFG_RCGR   0x01843008ULL
 #define GCC_SDCC2_APPS_CBCR       0x01843018ULL
 #define GCC_SDCC2_AHB_CBCR        0x0184301CULL
+
+#define SDCC1_CORE_BASE           0x07824000ULL
+#define SDCC1_HC_BASE             0x07824900ULL
+#define SDCC2_CORE_BASE           0x07864000ULL
+#define SDCC2_HC_BASE             0x07864900ULL
 
 STATIC
 VOID
@@ -86,7 +93,7 @@ EnableGccSdcc (
 
   DEBUG ((
     DEBUG_ERROR,
-    "KENZO_SDCC %a: AHB 0x%08x->0x%08x APPS 0x%08x->0x%08x RCG=0x%08x/0x%08x\n",
+    "KENZO_SDCC %a: AHB %08x->%08x APPS %08x->%08x RCG=%08x/%08x\n",
     Name,
     AhbBefore,
     MmioRead32 (AhbCbcr),
@@ -95,6 +102,127 @@ EnableGccSdcc (
     MmioRead32 (CmdRcgr),
     MmioRead32 (CfgRcgr)
     ));
+}
+
+STATIC
+BOOLEAN
+SdhciSimpleCmd (
+  IN  UINT64  Hc,
+  IN  UINT32  Cmd,
+  IN  UINT32  Arg,
+  IN  UINT16  Flags,
+  OUT UINT32  *RespOut
+  )
+{
+  UINTN   Spin;
+  UINT16  Norm;
+  UINT16  Err;
+
+  MmioWrite32 (Hc + 0x38, 0);
+  MmioWrite32 (Hc + 0x34, 0xFFFFFFFFU);
+  MmioWrite32 (Hc + 0x30, 0xFFFFFFFFU);
+  MmioWrite8  (Hc + 0x2E, 0x0EU);
+  for (Spin = 0; Spin < 10000; Spin++) {
+    if ((MmioRead32 (Hc + 0x24) & 0x3U) == 0) {
+      break;
+    }
+    MicroSecondDelay (10);
+  }
+  MmioWrite32 (Hc + 0x08, Arg);
+  MmioWrite16 (Hc + 0x0C, 0);
+  MmioWrite16 (Hc + 0x0E, (UINT16)(((Cmd & 0x3FU) << 8) | Flags));
+  Norm = 0;
+  Err  = 0;
+  for (Spin = 0; Spin < 20000; Spin++) {
+    Norm = MmioRead16 (Hc + 0x30);
+    if ((Norm & 0x8000U) != 0) {
+      Err = MmioRead16 (Hc + 0x32);
+      break;
+    }
+    if ((Norm & 0x0001U) != 0) {
+      break;
+    }
+    MicroSecondDelay (10);
+  }
+  *RespOut = MmioRead32 (Hc + 0x10);
+  MmioWrite32 (Hc + 0x30, 0xFFFFFFFFU);
+  if ((Err != 0) || ((Norm & 0x0001U) == 0)) {
+    MmioWrite8 (Hc + 0x2F, 0x06U);
+    for (Spin = 0; Spin < 5000; Spin++) {
+      if ((MmioRead8 (Hc + 0x2F) & 0x06U) == 0) {
+        break;
+      }
+      MicroSecondDelay (10);
+    }
+    DEBUG ((DEBUG_ERROR, "  CMD%u fail norm=%04x err=%04x ps=%08x resp=%08x\n", Cmd, Norm, Err, MmioRead32 (Hc + 0x24), *RespOut));
+    return FALSE;
+  }
+  return TRUE;
+}
+
+STATIC
+VOID
+ProbeSdccController (
+  IN CONST CHAR8  *Name,
+  IN UINT64       Core,
+  IN UINT64       Hc,
+  IN BOOLEAN      IsEmmc
+  )
+{
+  UINT32  HcModeBefore;
+  UINT32  HcModeAfter;
+  UINT32  Pwrctl;
+  UINT32  Resp;
+
+  DEBUG ((
+    DEBUG_ERROR,
+    "PROBE %a HC: CAP=%08x PS=%08x CLK=%04x PWR=%02x HC1=%02x HC2=%04x\n",
+    Name,
+    MmioRead32 (Hc + 0x40),
+    MmioRead32 (Hc + 0x24),
+    MmioRead16 (Hc + 0x2C),
+    MmioRead8  (Hc + 0x29),
+    MmioRead8  (Hc + 0x28),
+    MmioRead16 (Hc + 0x3E)
+    ));
+  DEBUG ((DEBUG_ERROR, "PROBE %a reading core_mem 0x%lx...\n", Name, Core));
+  HcModeBefore = MmioRead32 (Core + 0x78);
+  Pwrctl       = MmioRead32 (Core + 0xDC);
+  if (Pwrctl != 0) {
+    MmioWrite32 (Core + 0xE0, Pwrctl);
+    MmioWrite32 (Core + 0xE8, 0x3U);
+  }
+  MmioWrite32 (Core + 0x78, 0x1U);
+  MmioWrite32 (Core + 0x78, 0x2001U);
+  HcModeAfter = MmioRead32 (Core + 0x78);
+  DEBUG ((DEBUG_ERROR, "PROBE %a CORE: HC_MODE %08x->%08x PWRCTL=%08x MCI_CLK=%08x\n",
+          Name, HcModeBefore, HcModeAfter, Pwrctl, MmioRead32 (Core + 0x04)));
+
+  if (IsEmmc) {
+    Resp = 0;
+    if (!SdhciSimpleCmd (Hc, 13, 2U << 16, 0x1AU, &Resp)) {
+      if (SdhciSimpleCmd (Hc, 5, 2U << 16, 0x1BU, &Resp)) {
+        DEBUG ((DEBUG_ERROR, "  eMMC CMD5 AWAKE OK resp=%08x\n", Resp));
+        MicroSecondDelay (5000);
+        SdhciSimpleCmd (Hc, 13, 2U << 16, 0x1AU, &Resp);
+      }
+    }
+    DEBUG ((DEBUG_ERROR, "  eMMC CMD13 resp=%08x (state=%u)\n", Resp, (Resp >> 9) & 0xFU));
+    if (((Resp >> 9) & 0xFU) == 3U) {
+      if (SdhciSimpleCmd (Hc, 7, 2U << 16, 0x1BU, &Resp)) {
+        SdhciSimpleCmd (Hc, 13, 2U << 16, 0x1AU, &Resp);
+        DEBUG ((DEBUG_ERROR, "  eMMC after CMD7 resp=%08x (state=%u)\n", Resp, (Resp >> 9) & 0xFU));
+      }
+    }
+  } else {
+    // MicroSD (SDCC2): check if CMD0 + CMD8(0x1AA) responds
+    Resp = 0;
+    SdhciSimpleCmd (Hc, 0, 0, 0x00U, &Resp);
+    MicroSecondDelay (5000);
+    if (SdhciSimpleCmd (Hc, 8, 0x1AAU, 0x1AU, &Resp)) {
+      DEBUG ((DEBUG_ERROR, "  SDCC2 microSD CMD8 OK! resp=%08x\n", Resp));
+    }
+  }
 }
 
 STATIC
@@ -215,13 +343,16 @@ KenzoInitrdDecompressEntry (
 
   Start = ReadCells (StartProp, StartLen / 4);
   End   = ReadCells (EndProp, EndLen / 4);
-  if ((End <= Start) || ((End - Start) < 18)) {
-    return EFI_SUCCESS;
-  }
-
-  // Only decompress if prefixed with "KLZM" magic
-  if (ReadUnaligned32 ((CONST UINT32 *)(UINTN)Start) != KENZO_KLZM_MAGIC) {
-    return EFI_SUCCESS;
+  if ((End <= Start) || ((End - Start) < 18) ||
+      (ReadUnaligned32 ((CONST UINT32 *)(UINTN)Start) != KENZO_KLZM_MAGIC))
+  {
+    // Diagnostic UEFI-only boot (no KLZM ramdisk): probe SDCC1 & SDCC2 and hold on screen.
+    ProbeSdccController ("SDCC1", SDCC1_CORE_BASE, SDCC1_HC_BASE, TRUE);
+    ProbeSdccController ("SDCC2", SDCC2_CORE_BASE, SDCC2_HC_BASE, FALSE);
+    DEBUG ((DEBUG_ERROR, "KENZO_SDCC: diagnostic probe complete (holding screen)\n"));
+    for (;;) {
+      MicroSecondDelay (1000000);
+    }
   }
 
   CompSize = (UINTN)(End - Start - 4);
