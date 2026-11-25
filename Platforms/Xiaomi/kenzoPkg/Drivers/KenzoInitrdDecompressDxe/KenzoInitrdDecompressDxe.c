@@ -162,6 +162,125 @@ SdhciSimpleCmd (
 
 STATIC
 VOID
+AckPwrctl (
+  IN UINT64  Core
+  )
+{
+  UINT32  St;
+  UINT32  Ctl;
+  UINTN   Spin;
+
+  for (Spin = 0; Spin < 500; Spin++) {
+    St = MmioRead32 (Core + 0xDC);
+    if (St != 0) {
+      MmioWrite32 (Core + 0xE0, St);
+      // BUS_SUCCESS = BIT0 (0x1), IO_SUCCESS = BIT2 (0x4). NEVER set BIT1 (BUS_FAIL)!
+      Ctl = 0;
+      if ((St & 0x03U) != 0) {
+        Ctl |= 0x01U;
+      }
+      if ((St & 0x0CU) != 0) {
+        Ctl |= 0x04U;
+      }
+      if (Ctl != 0) {
+        MmioWrite32 (Core + 0xE8, Ctl);
+      }
+      MicroSecondDelay (100);
+      return;
+    }
+    MicroSecondDelay (10);
+  }
+}
+
+STATIC
+VOID
+SetSdhciClock (
+  IN UINT64  Hc,
+  IN UINT16  Div
+  )
+{
+  UINTN   Spin;
+  UINT16  Clk;
+
+  MmioWrite16 (Hc + 0x2C, 0);
+  MicroSecondDelay (100);
+  Clk = (UINT16)(((Div & 0xFFU) << 8) | (((Div >> 8) & 0x03U) << 6) | 0x0001U);
+  MmioWrite16 (Hc + 0x2C, Clk);
+  for (Spin = 0; Spin < 5000; Spin++) {
+    if ((MmioRead16 (Hc + 0x2C) & 0x0002U) != 0) {
+      break;
+    }
+    MicroSecondDelay (10);
+  }
+  MmioWrite16 (Hc + 0x2C, (UINT16)(Clk | 0x0004U));
+  MicroSecondDelay (1000);
+}
+
+STATIC
+BOOLEAN
+SdhciReadSectorPio (
+  IN  UINT64  Hc,
+  IN  UINT32  Lba,
+  OUT UINT8   *Buf512
+  )
+{
+  UINTN   Spin;
+  UINT16  Norm;
+  UINT16  Err;
+  BOOLEAN BufRead;
+  BOOLEAN XferDone;
+  UINT32  W;
+
+  MmioWrite32 (Hc + 0x38, 0);
+  MmioWrite32 (Hc + 0x34, 0xFFFFFFFFU);
+  MmioWrite32 (Hc + 0x30, 0xFFFFFFFFU);
+  MmioWrite8  (Hc + 0x2E, 0x0EU);
+  for (Spin = 0; Spin < 10000; Spin++) {
+    if ((MmioRead32 (Hc + 0x24) & 0x3U) == 0) {
+      break;
+    }
+    MicroSecondDelay (10);
+  }
+  MmioWrite16 (Hc + 0x04, 512);
+  MmioWrite16 (Hc + 0x06, 1);
+  MmioWrite32 (Hc + 0x08, Lba);
+  MmioWrite16 (Hc + 0x0C, 0x0010U); // Read, PIO
+  MmioWrite16 (Hc + 0x0E, (UINT16)((17U << 8) | 0x003AU));
+
+  Norm     = 0;
+  Err      = 0;
+  BufRead  = FALSE;
+  XferDone = FALSE;
+  for (Spin = 0; Spin < 50000; Spin++) {
+    Norm = MmioRead16 (Hc + 0x30);
+    if ((Norm & 0x8000U) != 0) {
+      Err = MmioRead16 (Hc + 0x32);
+      break;
+    }
+    if (!BufRead && ((Norm & 0x0020U) != 0)) {
+      MmioWrite16 (Hc + 0x30, 0x0020U);
+      for (W = 0; W < 128; W++) {
+        ((UINT32 *)Buf512)[W] = MmioRead32 (Hc + 0x20);
+      }
+      BufRead = TRUE;
+    }
+    if (BufRead && ((Norm & 0x0002U) != 0)) {
+      MmioWrite16 (Hc + 0x30, 0x0002U);
+      XferDone = TRUE;
+      break;
+    }
+    MicroSecondDelay (10);
+  }
+  MmioWrite32 (Hc + 0x30, 0xFFFFFFFFU);
+  if ((Err != 0) || !BufRead || !XferDone) {
+    DEBUG ((DEBUG_ERROR, "  CMD17(%u) fail norm=%04x err=%04x ps=%08x\n", Lba, Norm, Err, MmioRead32 (Hc + 0x24)));
+    return FALSE;
+  }
+  return TRUE;
+}
+
+STATIC
+VOID
 ProbeSdccController (
   IN CONST CHAR8  *Name,
   IN UINT64       Core,
@@ -170,52 +289,100 @@ ProbeSdccController (
   )
 {
   UINT32  HcModeBefore;
-  UINT32  HcModeAfter;
   UINT32  Pwrctl;
   UINT32  Resp;
+  UINTN   Spin;
+  UINT8   Sec[512];
+
+  // 1. Switch SDCC1 RCG to clean 19.2 MHz XO so 400 kHz / 9.6 MHz DS needs no HS200/DLL tuning.
+  if (IsEmmc) {
+    MmioWrite32 (GCC_SDCC1_APPS_CFG_RCGR, 0);
+    MmioWrite32 (GCC_SDCC1_APPS_CMD_RCGR, MmioRead32 (GCC_SDCC1_APPS_CMD_RCGR) | BIT0);
+    for (Spin = 0; Spin < 50000; Spin++) {
+      if ((MmioRead32 (GCC_SDCC1_APPS_CMD_RCGR) & BIT0) == 0) {
+        break;
+      }
+    }
+  }
+
+  HcModeBefore = MmioRead32 (Core + 0x78);
+  Pwrctl       = MmioRead32 (Core + 0xDC);
+  AckPwrctl (Core);
+
+  // 2. Full Qualcomm core reset + HC_MODE_EN (matches Linux sdhci-msm & U-Boot msm_sdhci)
+  MmioWrite32 (Core + 0x00, MmioRead32 (Core + 0x00) | BIT7); // CORE_SW_RST
+  for (Spin = 0; Spin < 50000; Spin++) {
+    if ((MmioRead32 (Core + 0x00) & BIT7) == 0) {
+      break;
+    }
+    MicroSecondDelay (10);
+  }
+  MmioWrite32 (Core + 0x78, 0x00000001U); // HC_MODE_EN
+  MmioWrite32 (Core + 0x78, 0x00002001U); // HC_MODE_EN | FF_CLK_SW_RST_DIS
+  AckPwrctl (Core);
+
+  // 3. Standard SDHCI SW_RST_ALL + Bus Power ON + Ack PWRCTL!
+  MmioWrite8 (Hc + 0x2F, 0x01U);
+  for (Spin = 0; Spin < 10000; Spin++) {
+    if ((MmioRead8 (Hc + 0x2F) & 0x01U) == 0) {
+      break;
+    }
+    MicroSecondDelay (10);
+  }
+  AckPwrctl (Core);
+
+  // Clear Qualcomm vendor DLL/HS200 select-in mux for clean 1-bit DS
+  MmioWrite32 (Hc + 0x10C, MmioRead32 (Hc + 0x10C) & ~(0xFU << 18));
+  MmioWrite8  (Hc + 0x28, 0x00U); // 1-bit DS
+  MmioWrite16 (Hc + 0x3E, 0x0000U);
+  MmioWrite8  (Hc + 0x29, IsEmmc ? 0x0BU : 0x0FU); // 1.8V eMMC / 3.3V SD + Bus Power ON
+  AckPwrctl (Core);
+  SetSdhciClock (Hc, 0x0018U); // 19.2 MHz / (2*24) = 400 kHz
 
   DEBUG ((
     DEBUG_ERROR,
-    "PROBE %a HC: CAP=%08x PS=%08x CLK=%04x PWR=%02x HC1=%02x HC2=%04x\n",
+    "PROBE %a: HC_MODE %x->%x PWRCTL=%x->%x PS=%08x CLK=%04x PWR=%02x\n",
     Name,
-    MmioRead32 (Hc + 0x40),
+    HcModeBefore,
+    MmioRead32 (Core + 0x78),
+    Pwrctl,
+    MmioRead32 (Core + 0xDC),
     MmioRead32 (Hc + 0x24),
     MmioRead16 (Hc + 0x2C),
-    MmioRead8  (Hc + 0x29),
-    MmioRead8  (Hc + 0x28),
-    MmioRead16 (Hc + 0x3E)
+    MmioRead8  (Hc + 0x29)
     ));
-  DEBUG ((DEBUG_ERROR, "PROBE %a reading core_mem 0x%lx...\n", Name, Core));
-  HcModeBefore = MmioRead32 (Core + 0x78);
-  Pwrctl       = MmioRead32 (Core + 0xDC);
-  if (Pwrctl != 0) {
-    MmioWrite32 (Core + 0xE0, Pwrctl);
-    MmioWrite32 (Core + 0xE8, 0x3U);
-  }
-  MmioWrite32 (Core + 0x78, 0x1U);
-  MmioWrite32 (Core + 0x78, 0x2001U);
-  HcModeAfter = MmioRead32 (Core + 0x78);
-  DEBUG ((DEBUG_ERROR, "PROBE %a CORE: HC_MODE %08x->%08x PWRCTL=%08x MCI_CLK=%08x\n",
-          Name, HcModeBefore, HcModeAfter, Pwrctl, MmioRead32 (Core + 0x04)));
 
   if (IsEmmc) {
     Resp = 0;
-    if (!SdhciSimpleCmd (Hc, 13, 2U << 16, 0x1AU, &Resp)) {
-      if (SdhciSimpleCmd (Hc, 5, 2U << 16, 0x1BU, &Resp)) {
-        DEBUG ((DEBUG_ERROR, "  eMMC CMD5 AWAKE OK resp=%08x\n", Resp));
-        MicroSecondDelay (5000);
-        SdhciSimpleCmd (Hc, 13, 2U << 16, 0x1AU, &Resp);
+    SdhciSimpleCmd (Hc, 0, 0, 0x00U, &Resp);
+    MicroSecondDelay (5000);
+    for (Spin = 0; Spin < 200; Spin++) {
+      if (SdhciSimpleCmd (Hc, 1, 0x40FF8080U, 0x02U, &Resp) && ((Resp & 0x80000000U) != 0)) {
+        break;
       }
+      MicroSecondDelay (2000);
     }
-    DEBUG ((DEBUG_ERROR, "  eMMC CMD13 resp=%08x (state=%u)\n", Resp, (Resp >> 9) & 0xFU));
-    if (((Resp >> 9) & 0xFU) == 3U) {
-      if (SdhciSimpleCmd (Hc, 7, 2U << 16, 0x1BU, &Resp)) {
+    DEBUG ((DEBUG_ERROR, "  eMMC CMD1 OCR=%08x (tries=%u)\n", Resp, (UINT32)Spin));
+    if ((Resp & 0x80000000U) != 0) {
+      if (SdhciSimpleCmd (Hc, 2, 0, 0x09U, &Resp) &&
+          SdhciSimpleCmd (Hc, 3, 2U << 16, 0x1AU, &Resp) &&
+          SdhciSimpleCmd (Hc, 7, 2U << 16, 0x1BU, &Resp))
+      {
+        SdhciSimpleCmd (Hc, 16, 512, 0x1AU, &Resp);
+        SetSdhciClock (Hc, 0x0001U); // 9.6 MHz DS
         SdhciSimpleCmd (Hc, 13, 2U << 16, 0x1AU, &Resp);
-        DEBUG ((DEBUG_ERROR, "  eMMC after CMD7 resp=%08x (state=%u)\n", Resp, (Resp >> 9) & 0xFU));
+        DEBUG ((DEBUG_ERROR, "  eMMC TRAN! CMD13=%08x\n", Resp));
+        if (SdhciReadSectorPio (Hc, 1, Sec)) {
+          DEBUG ((
+            DEBUG_ERROR,
+            "  eMMC LBA1 SIG: '%c%c%c%c%c%c%c%c' first=%lx last=%lx\n",
+            Sec[0], Sec[1], Sec[2], Sec[3], Sec[4], Sec[5], Sec[6], Sec[7],
+            *(UINT64 *)(Sec + 40), *(UINT64 *)(Sec + 48)
+            ));
+        }
       }
     }
   } else {
-    // MicroSD (SDCC2): check if CMD0 + CMD8(0x1AA) responds
     Resp = 0;
     SdhciSimpleCmd (Hc, 0, 0, 0x00U, &Resp);
     MicroSecondDelay (5000);
