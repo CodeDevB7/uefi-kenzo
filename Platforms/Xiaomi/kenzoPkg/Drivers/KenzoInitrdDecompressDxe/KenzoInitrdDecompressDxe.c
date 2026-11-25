@@ -140,25 +140,26 @@ RpmSendLdoVote (
   IN UINT32            FifoSize,
   IN UINT32            MsgId,
   IN UINT32            LdoId,
-  IN UINT32            MicroVolts
+  IN UINT32            MicroVolts,
+  IN UINT32            MilliAmps
   )
 {
-  UINT32  Pkt[18];
+  UINT32  Pkt[24];
   UINT32  Head;
   UINTN   Spin;
 
   ZeroMem (Pkt, sizeof (Pkt));
   // 20-byte SMD packet header (5 words)
-  Pkt[0] = 52U;           // Payload bytes (8 + 20 + 24)
+  Pkt[0] = 76U;           // Payload bytes (8 + 20 + 48)
   // 8-byte qcom_rpm_header
   Pkt[5] = 0x00716572U;   // "req\0"
-  Pkt[6] = 44U;           // Request body bytes (20 + 24)
+  Pkt[6] = 68U;           // Request body bytes (20 + 48)
   // 20-byte qcom_rpm_request
   Pkt[7]  = MsgId;
   Pkt[8]  = 0U;           // ACTIVE_SET
   Pkt[9]  = 0x616F646CU;  // "ldoa"
   Pkt[10] = LdoId;
-  Pkt[11] = 24U;          // 2 KVPs (12 bytes each)
+  Pkt[11] = 48U;          // 4 KVPs (12 bytes each)
   // KVP 1: swen = 1
   Pkt[12] = 0x6E657773U;  // "swen"
   Pkt[13] = 4U;
@@ -167,6 +168,14 @@ RpmSendLdoVote (
   Pkt[15] = 0x00007675U;  // "uv\0\0"
   Pkt[16] = 4U;
   Pkt[17] = MicroVolts;
+  // KVP 3: ma = MilliAmps
+  Pkt[18] = 0x0000616DU;  // "ma\0\0"
+  Pkt[19] = 4U;
+  Pkt[20] = MilliAmps;
+  // KVP 4: lsmd = 1 (HPM High Power Mode)
+  Pkt[21] = 0x646D736CU;  // "lsmd"
+  Pkt[22] = 4U;
+  Pkt[23] = 1U;
 
   Head = Tx->Head;
   SmdWriteRing (TxFifo, FifoSize, &Head, Pkt, sizeof (Pkt));
@@ -275,17 +284,18 @@ RpmEnableSdcc2Power (
           Cid, InfoAddr, FifoAddr, FifoSize, Tx->State, Rx->State));
 
   if ((Tx->State == 2U) && (Rx->State == 2U)) {
+    UINT32  Sdc1Tlmm = MmioRead32 (0x01109000ULL);
+    UINT32  Sdc2Before = MmioRead32 (TLMM_SDC2_HDRV_PULL_CTL);
     // Drain any stale RX bytes left by aboot first
     Rx->Tail = Rx->Head;
-    // Enable PM8950 LDO11 (2.95V SD VDD) and LDO12 (2.95V SD VDD-IO)
-    RpmSendLdoVote (Tx, Rx, FifoAddr, FifoSize, 1U, 11U, 2950000U);
-    RpmSendLdoVote (Tx, Rx, FifoAddr, FifoSize, 2U, 12U, 2950000U);
-    MicroSecondDelay (20000);
-    // Configure SDC2 TLMM pad drive/pull (10mA/16mA drive, pull-up on CMD/DAT)
-    MmioWrite32 (TLMM_SDC2_HDRV_PULL_CTL, 0x00016DFFU);
-    DEBUG ((DEBUG_ERROR, "RPM_SMD: LDO11+12 voted (tx=%u/%u rx=%u/%u rx0=%08x,%08x)\n",
-            Tx->Tail, Tx->Head, Rx->Tail, Rx->Head,
-            MmioRead32 (FifoAddr + FifoSize + 20), MmioRead32 (FifoAddr + FifoSize + 24)));
+    // Enable PM8950 LDO11 (2.95V SD VDD, 800mA HPM) and LDO12 (2.95V SD VDD-IO, 22mA HPM)
+    RpmSendLdoVote (Tx, Rx, FifoAddr, FifoSize, 1U, 11U, 2950000U, 800U);
+    RpmSendLdoVote (Tx, Rx, FifoAddr, FifoSize, 2U, 12U, 2950000U, 22U);
+    MicroSecondDelay (30000);
+    // Configure SDC2 TLMM pad drive/pull: CLK=16mA/no-pull, CMD=10mA/pull-up, DATA=10mA/pull-up
+    MmioWrite32 (TLMM_SDC2_HDRV_PULL_CTL, 0x00001FE4U);
+    DEBUG ((DEBUG_ERROR, "RPM_SMD: LDO11+12 HPM (tx=%u/%u rx=%u/%u tlmm1=%08x tlmm2=%08x->%08x)\n",
+            Tx->Tail, Tx->Head, Rx->Tail, Rx->Head, Sdc1Tlmm, Sdc2Before, MmioRead32 (TLMM_SDC2_HDRV_PULL_CTL)));
   }
 }
 
