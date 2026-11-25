@@ -288,38 +288,36 @@ RpmEnableSdcc2Power (
     UINT32  RxEnd;
     UINT32  W;
     UINT8   ReplyBuf[104];
-    UINT32  Sdc1Tlmm = MmioRead32 (0x01109000ULL);
-    UINT32  Sdc2Before = MmioRead32 (TLMM_SDC2_HDRV_PULL_CTL);
     // Drain any stale RX bytes left by aboot first
     Rx->Tail = Rx->Head;
     RxStart  = Rx->Head;
     // Enable PM8950 LDO11 (2.95V SD VDD, 800mA HPM) and LDO12 (2.95V SD VDD-IO, 22mA HPM)
     RpmSendLdoVote (Tx, Rx, FifoAddr, FifoSize, 1U, 11U, 2950000U, 800U);
     RxEnd = Rx->Head;
-    // Copy first reply packet from RX FIFO for inspection
+    // Copy the actual reply packet at RxEnd - 80 (skipping any 40-byte aboot reply)
     ZeroMem (ReplyBuf, sizeof (ReplyBuf));
     for (W = 0; W < 24; W++) {
-      UINT32  Off = (RxStart + W * 4) % FifoSize;
+      UINT32  BaseOff = (RxEnd >= 80U) ? (RxEnd - 80U) : 0U;
+      UINT32  Off = (BaseOff + W * 4) % FifoSize;
       ((UINT32 *)ReplyBuf)[W] = MmioRead32 (FifoAddr + FifoSize + Off);
     }
     RpmSendLdoVote (Tx, Rx, FifoAddr, FifoSize, 2U, 12U, 2950000U, 22U);
     MicroSecondDelay (30000);
-    // Keep bootloader's pull-up bits (0x9FE4 already had CMD/DATA pull-up)
-    DEBUG ((DEBUG_ERROR, "RPM_SMD: tx=%u/%u rx=%u->%u->%u tlmm1=%08x tlmm2=%08x\n",
-            Tx->Tail, Tx->Head, RxStart, RxEnd, Rx->Head, Sdc1Tlmm, Sdc2Before));
-    DEBUG ((DEBUG_ERROR, "RPM_RX0: len=%u hdr=%08x,%08x k0=%08x,%08x,%08x k1=%08x,%08x\n",
+    DEBUG ((DEBUG_ERROR, "RPM_SMD: tx=%u/%u rx=%u->%u->%u\n",
+            Tx->Tail, Tx->Head, RxStart, RxEnd, Rx->Head));
+    DEBUG ((DEBUG_ERROR, "RPM_RX1: len=%u hdr=%08x,%08x k0=%08x,%08x,%08x k1=%08x,%08x\n",
             ((UINT32 *)ReplyBuf)[0], ((UINT32 *)ReplyBuf)[5], ((UINT32 *)ReplyBuf)[6],
             ((UINT32 *)ReplyBuf)[7], ((UINT32 *)ReplyBuf)[8], ((UINT32 *)ReplyBuf)[9],
             ((UINT32 *)ReplyBuf)[10], ((UINT32 *)ReplyBuf)[11]));
-    if (((UINT32 *)ReplyBuf)[0] > 20) {
+    {
       UINT32  B;
-      for (B = 48; B < 96; B++) {
+      for (B = 40; B < 80; B++) {
         if ((ReplyBuf[B] < 0x20) || (ReplyBuf[B] > 0x7E)) {
           ReplyBuf[B] = '.';
         }
       }
-      ReplyBuf[96] = 0;
-      DEBUG ((DEBUG_ERROR, "RPM_TXT: %a\n", (CHAR8 *)(ReplyBuf + 48)));
+      ReplyBuf[80] = 0;
+      DEBUG ((DEBUG_ERROR, "RPM_TXT: %a\n", (CHAR8 *)(ReplyBuf + 40)));
     }
   }
 }
@@ -619,12 +617,20 @@ ProbeSdccController (
   }
   AckPwrctl (Core);
 
-  // Clear Qualcomm vendor DLL/HS200 select-in mux for clean 1-bit DS
-  MmioWrite32 (Hc + 0x10C, MmioRead32 (Hc + 0x10C) & ~(0xFU << 18));
+  // Clear Qualcomm vendor DLL/HS200 select-in mux for clean 1-bit DS.
+  // For SDCC2 (microSD 2.95V), enable IO_PAD_PWR_SWITCH_EN (BIT15) with IO_PAD_PWR_SWITCH=0 (HIGH 2.95V).
+  {
+    UINT32  Vs = MmioRead32 (Hc + 0x10C) & ~(0xFU << 18);
+    if (!IsEmmc) {
+      Vs = (Vs | BIT15) & ~BIT16;
+    }
+    MmioWrite32 (Hc + 0x10C, Vs);
+  }
   MmioWrite8  (Hc + 0x28, 0x00U); // 1-bit DS
   MmioWrite16 (Hc + 0x3E, 0x0000U);
   MmioWrite8  (Hc + 0x29, IsEmmc ? 0x0BU : 0x0FU); // 1.8V eMMC / 3.3V SD + Bus Power ON
   AckPwrctl (Core);
+  AckPwrctl (Core); // Ack both BUS_ON and IO_HIGH if queued
   SetSdhciClock (Hc, 0x0018U); // 19.2 MHz / (2*24) = 400 kHz
 
   DEBUG ((
