@@ -18,7 +18,7 @@
 
 #define KENZO_KLZM_MAGIC          0x4D5A4C4BU  // "KLZM"
 #define KENZO_HIGH_INITRD_BASE    0xA0000000ULL
-#define KENZO_HIGH_INITRD_MAX     0x10000000U  // 256 MiB protected window
+#define KENZO_HIGH_INITRD_MAX     0x05000000U  // 80 MiB protected window (leaves ~1.4 GiB contiguous for XNU)
 
 // MSM8956 GCC SDCC1 (eMMC @ 0x07824900) and SDCC2 (microSD @ 0x07864900) clocks
 // Verified directly against Kenzo stock Linux kernel (gcc-msm8976).
