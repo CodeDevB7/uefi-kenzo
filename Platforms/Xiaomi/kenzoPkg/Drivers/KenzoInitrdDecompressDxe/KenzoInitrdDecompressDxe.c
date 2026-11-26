@@ -500,6 +500,75 @@ SetSdhciClock (
 
 STATIC
 BOOLEAN
+SdhciReadCmd6Status (
+  IN  UINT64  Hc,
+  IN  UINT32  Arg,
+  OUT UINT8   *Buf64
+  )
+{
+  UINTN   Spin;
+  UINT16  Norm;
+  UINT16  Err;
+  BOOLEAN BufRead;
+  BOOLEAN XferDone;
+  UINT32  W;
+
+  MmioWrite32 (Hc + 0x38, 0);
+  MmioWrite32 (Hc + 0x34, 0xFFFFFFFFU);
+  MmioWrite32 (Hc + 0x30, 0xFFFFFFFFU);
+  MicroSecondDelay (100);
+  MmioWrite8  (Hc + 0x2E, 0x0EU);
+  for (Spin = 0; Spin < 10000; Spin++) {
+    if ((MmioRead32 (Hc + 0x24) & 0x3U) == 0) {
+      break;
+    }
+    MicroSecondDelay (10);
+  }
+  MmioWrite16 (Hc + 0x04, 64);
+  MmioWrite16 (Hc + 0x06, 1);
+  MmioWrite32 (Hc + 0x08, Arg);
+  MmioWrite32 (Hc + 0x0C, 0x0010U | ((UINT32)((6U << 8) | 0x003AU) << 16)); // Read PIO + CMD6
+
+  Norm     = 0;
+  Err      = 0;
+  BufRead  = FALSE;
+  XferDone = FALSE;
+  for (Spin = 0; Spin < 50000; Spin++) {
+    Norm = MmioRead16 (Hc + 0x30);
+    if ((Norm & 0x8000U) != 0) {
+      Err = MmioRead16 (Hc + 0x32);
+      break;
+    }
+    if (!BufRead && ((Norm & 0x0020U) != 0)) {
+      MmioWrite16 (Hc + 0x30, 0x0020U);
+      for (W = 0; W < 16; W++) {
+        ((UINT32 *)Buf64)[W] = MmioRead32 (Hc + 0x20);
+      }
+      BufRead = TRUE;
+    }
+    if (BufRead && ((Norm & 0x0002U) != 0)) {
+      MmioWrite16 (Hc + 0x30, 0x0002U);
+      XferDone = TRUE;
+      break;
+    }
+    MicroSecondDelay (10);
+  }
+  MmioWrite32 (Hc + 0x30, 0xFFFFFFFFU);
+  if ((Err != 0) || !BufRead || !XferDone) {
+    MmioWrite8 (Hc + 0x2F, 0x06U);
+    for (Spin = 0; Spin < 5000; Spin++) {
+      if ((MmioRead8 (Hc + 0x2F) & 0x06U) == 0) {
+        break;
+      }
+      MicroSecondDelay (10);
+    }
+    return FALSE;
+  }
+  return TRUE;
+}
+
+STATIC
+BOOLEAN
 SdhciReadSectorPio (
   IN  UINT64  Hc,
   IN  UINT32  Lba,
@@ -703,17 +772,69 @@ ProbeSdccController (
         {
           Rca = Resp & 0xFFFF0000U;
           if (SdhciSimpleCmd (Hc, 7, Rca, 0x1BU, &Resp)) {
+            BOOLEAN  Mode4Bit;
+            BOOLEAN  Mode50MHz;
+            UINT8    Cmd6Buf[64];
+
             SdhciSimpleCmd (Hc, 16, 512, 0x1AU, &Resp);
-            SetSdhciClock (Hc, 0x0001U); // 9.6 MHz DS
+            // 1. Switch microSD to 4-bit bus width (ACMD6 arg=2)
+            Mode4Bit = FALSE;
+            if (SdhciSimpleCmd (Hc, 55, Rca, 0x1AU, &Resp) &&
+                SdhciSimpleCmd (Hc, 6, 2U, 0x1AU, &Resp))
+            {
+              MmioWrite8 (Hc + 0x28, 0x02U); // 4-bit DS
+              MemoryFence ();
+              Mode4Bit = TRUE;
+            }
+            // 2. Switch GCC_SDCC2_APPS RCG to 50 MHz (GPLL0 800 MHz / 16: CFG_RCGR=0x11F)
+            MmioWrite16 (Hc + 0x2C, 0);
+            MicroSecondDelay (100);
+            MmioWrite32 (GCC_SDCC2_APPS_CFG_RCGR, 0x0000011FU);
+            MmioWrite32 (GCC_SDCC2_APPS_CMD_RCGR, MmioRead32 (GCC_SDCC2_APPS_CMD_RCGR) | BIT0);
+            for (Spin = 0; Spin < 50000; Spin++) {
+              if ((MmioRead32 (GCC_SDCC2_APPS_CMD_RCGR) & BIT0) == 0) {
+                break;
+              }
+            }
+            SetSdhciClock (Hc, 0x0001U); // 50 MHz / 2 = 25 MHz DS (12.5 MB/s @ 4-bit)
+
+            // 3. Try SD High-Speed 50 MHz (CMD6 group 1 = 1 -> 25 MB/s @ 4-bit), with safe fallback to 25 MHz
+            Mode50MHz = FALSE;
+            if (Mode4Bit && SdhciReadCmd6Status (Hc, 0x80FFFFF1U, Cmd6Buf) && ((Cmd6Buf[16] & 0x0FU) == 1U)) {
+              MmioWrite8 (Hc + 0x28, 0x06U); // 4-bit + High-Speed Enable
+              MemoryFence ();
+              SetSdhciClock (Hc, 0x0000U); // 50 MHz HS (div=0)
+              if (SdhciReadSectorPio (Hc, 0, Sec)) {
+                Mode50MHz = TRUE;
+              } else {
+                // Safe fallback to 4-bit 25 MHz DS
+                MmioWrite8 (Hc + 0x28, 0x02U);
+                MemoryFence ();
+                SetSdhciClock (Hc, 0x0001U);
+              }
+            }
+
             SdhciSimpleCmd (Hc, 13, Rca, 0x1AU, &Resp);
-            DEBUG ((DEBUG_ERROR, "  SDCC2 microSD TRAN! RCA=%04x CMD13=%08x\n", Rca >> 16, Resp));
-            if (SdhciReadSectorPio (Hc, 0, Sec)) {
+            DEBUG ((
+              DEBUG_ERROR,
+              "  SDCC2 microSD TRAN! RCA=%04x mode=%a CMD13=%08x\n",
+              Rca >> 16,
+              Mode50MHz ? "4b-50MHz" : (Mode4Bit ? "4b-25MHz" : "1b-25MHz"),
+              Resp
+              ));
+            if (Mode50MHz || SdhciReadSectorPio (Hc, 0, Sec)) {
               DEBUG ((
                 DEBUG_ERROR,
-                "  SDCC2 LBA0 MBR: %02x %02x (part0 type=%02x start=%08x len=%08x)\n",
-                Sec[510], Sec[511], Sec[450],
-                ReadUnaligned32 ((CONST UINT32 *)(Sec + 454)),
-                ReadUnaligned32 ((CONST UINT32 *)(Sec + 458))
+                "  SDCC2 LBA0: '%c%c%c%c%c%c%c%c' (%02x %02x)\n",
+                (Sec[0] >= 32 && Sec[0] < 127) ? Sec[0] : '.',
+                (Sec[1] >= 32 && Sec[1] < 127) ? Sec[1] : '.',
+                (Sec[2] >= 32 && Sec[2] < 127) ? Sec[2] : '.',
+                (Sec[3] >= 32 && Sec[3] < 127) ? Sec[3] : '.',
+                (Sec[4] >= 32 && Sec[4] < 127) ? Sec[4] : '.',
+                (Sec[5] >= 32 && Sec[5] < 127) ? Sec[5] : '.',
+                (Sec[6] >= 32 && Sec[6] < 127) ? Sec[6] : '.',
+                (Sec[7] >= 32 && Sec[7] < 127) ? Sec[7] : '.',
+                Sec[510], Sec[511]
                 ));
             }
           }
