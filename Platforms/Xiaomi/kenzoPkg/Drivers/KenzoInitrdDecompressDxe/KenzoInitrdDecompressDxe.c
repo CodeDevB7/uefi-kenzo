@@ -201,6 +201,60 @@ RpmSendLdoVote (
 
 STATIC
 VOID
+RpmSendSmpaCornerVote (
+  IN SMD_HALF_CH_WORD  *Tx,
+  IN SMD_HALF_CH_WORD  *Rx,
+  IN UINT64            FifoAddr,
+  IN UINT32            FifoSize,
+  IN UINT32            MsgId,
+  IN UINT32            SmpaId,
+  IN UINT32            Vlvl
+  )
+{
+  UINT32  Pkt[18]; // 5 SMD header words (20B) + 28B RPM header/req + 24B KVPs (2x12B) = 72B
+  UINT32  Head;
+  UINTN   Spin;
+  UINT8   *TxFifo = (UINT8 *)(UINTN)FifoAddr;
+
+  ZeroMem (Pkt, sizeof (Pkt));
+  Pkt[0]  = 52U;          // Payload bytes (8 + 20 + 24)
+  Pkt[5]  = 0x00716572U;  // "req\0"
+  Pkt[6]  = 44U;          // Request body bytes (20 + 24)
+  Pkt[7]  = MsgId;
+  Pkt[8]  = 0U;           // ACTIVE_SET
+  Pkt[9]  = 0x61706D73U;  // "smpa"
+  Pkt[10] = SmpaId;
+  Pkt[11] = 24U;          // 2 KVPs (12 bytes each)
+  // KVP 1: swen = 1
+  Pkt[12] = 0x6E657773U;  // "swen"
+  Pkt[13] = 4U;
+  Pkt[14] = 1U;
+  // KVP 2: vlvl = Vlvl (e.g. 384 = 0x180 TURBO)
+  Pkt[15] = 0x6C766C76U;  // "vlvl"
+  Pkt[16] = 4U;
+  Pkt[17] = Vlvl;
+
+  Head = Tx->Head;
+  SmdWriteRing (TxFifo, FifoSize, &Head, Pkt, sizeof (Pkt));
+  MemoryFence ();
+  Tx->Head  = Head;
+  Tx->FHead = 1U;
+  Rx->FTail = 1U;
+  SmdRingRpm ();
+
+  for (Spin = 0; Spin < 5000; Spin++) {
+    if ((Tx->Tail == Head) && (Rx->Head != Rx->Tail)) {
+      Rx->Tail  = Rx->Head;
+      Rx->FTail = 1U;
+      SmdRingRpm ();
+      break;
+    }
+    MicroSecondDelay (100);
+  }
+}
+
+STATIC
+VOID
 RpmEnableSdcc2Power (
   VOID
   )
@@ -297,13 +351,16 @@ RpmEnableSdcc2Power (
     RpmSendLdoVote (Tx, Rx, FifoAddr, FifoSize, 1U, 11U, 2950000U, 800U);
     RxMid = Rx->Head;
     RpmSendLdoVote (Tx, Rx, FifoAddr, FifoSize, 2U, 12U, 2950000U, 22U);
+    // Vote vdd_mx (PM8950 S6, smpa6) = TURBO (384) & vdd_hf_pll (PM8950 LDO7, 1.8V) for stock CPU Turbo
+    RpmSendSmpaCornerVote (Tx, Rx, FifoAddr, FifoSize, 3U, 6U, 384U);
+    RpmSendLdoVote (Tx, Rx, FifoAddr, FifoSize, 4U, 7U, 1800000U, 10U);
     // Program TLMM_SDC2_HDRV_PULL_CTL (0x01109000): clk=NP/16mA, cmd=PU/10mA, data=PU/10mA
     TlmmBefore = MmioRead32 (TLMM_SDC2_HDRV_PULL_CTL);
     MmioWrite32 (TLMM_SDC2_HDRV_PULL_CTL, 0x00001FE4U);
     MemoryFence ();
     TlmmAfter = MmioRead32 (TLMM_SDC2_HDRV_PULL_CTL);
     MicroSecondDelay (20000);
-    DEBUG ((DEBUG_ERROR, "RPM_SMD: LDO11+12 OK (tx=%u/%u rx=%u->%u->%u tlmm2=%08x->%08x)\n",
+    DEBUG ((DEBUG_ERROR, "RPM_SMD: LDO11+12+S6(384)+LDO7 OK (tx=%u/%u rx=%u->%u->%u tlmm2=%08x->%08x)\n",
             Tx->Tail, Tx->Head, RxStart, RxMid, Rx->Head, TlmmBefore, TlmmAfter));
   }
 }
