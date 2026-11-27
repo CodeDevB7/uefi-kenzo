@@ -214,7 +214,6 @@ RpmSendSmpaCornerVote (
   UINT32  Pkt[18]; // 5 SMD header words (20B) + 28B RPM header/req + 24B KVPs (2x12B) = 72B
   UINT32  Head;
   UINTN   Spin;
-  UINT8   *TxFifo = (UINT8 *)(UINTN)FifoAddr;
 
   ZeroMem (Pkt, sizeof (Pkt));
   Pkt[0]  = 52U;          // Payload bytes (8 + 20 + 24)
@@ -235,7 +234,7 @@ RpmSendSmpaCornerVote (
   Pkt[17] = Vlvl;
 
   Head = Tx->Head;
-  SmdWriteRing (TxFifo, FifoSize, &Head, Pkt, sizeof (Pkt));
+  SmdWriteRing (FifoAddr, FifoSize, &Head, Pkt, sizeof (Pkt));
   MemoryFence ();
   Tx->Head  = Head;
   Tx->FHead = 1U;
